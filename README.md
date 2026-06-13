@@ -1,10 +1,10 @@
 # Quest AR
 
-A mobile-first WebXR scavenger hunt built with Vite, JavaScript, and Three.js.
+A mobile-first WebXR educational scavenger hunt built with Vite, JavaScript, and Three.js.
 
-Players start an immersive AR session, scan the floor, follow a radar route, and walk to reveal three hidden animals: Panda, Lion, and Elephant. Each animal stays anchored after discovery and can be collected by getting close, centering it, tapping it, and answering its trivia quiz.
+Players choose a topic, generate AI-backed trivia orbs, start an immersive AR session, scan the floor, follow a radar route, and walk to reveal hidden topic orbs. Each orb stays anchored after discovery and can be completed by getting close, centering it, tapping it, and answering its trivia quiz.
 
-Animal achievement progress is saved in the browser with IndexedDB. XP, answer streaks, levels, collected animal counts, and the global leaderboard are saved through the Node server.
+Orb achievement progress is saved in the browser with IndexedDB. XP, answer streaks, levels, completed orb counts, and the global leaderboard are saved through the Node server.
 
 The server uses:
 
@@ -39,7 +39,12 @@ GET  /api/profile?playerId=...
 POST /api/answer
 POST /api/collect
 GET  /api/leaderboard
+POST /api/generate-topic
 ```
+
+Topic generation uses NVIDIA NIM when `NVIDIA_API_KEY` is set. The model defaults to `google/gemma-2-27b-it`; set `NIM_MODEL` to override it. If NIM is unavailable, the server falls back to built-in topic question banks.
+
+For local secret setup, copy `.env.example` to `.env` and fill in your own values. `.env` is ignored by Git.
 
 ## Railway
 
@@ -53,6 +58,14 @@ npm start
 
 Add a Railway PostgreSQL database to the project so Railway provides `DATABASE_URL`. The app will create its `players` table automatically on startup.
 
+Optional Railway environment variables:
+
+```text
+NVIDIA_API_KEY=your-nim-key
+NIM_MODEL=google/gemma-2-27b-it
+DATABASE_SSL=true
+```
+
 Without `DATABASE_URL`, the server still works using the local JSON database fallback, but that is not recommended for production leaderboards.
 
 ## Test On Android Chrome
@@ -62,10 +75,11 @@ WebXR immersive AR requires HTTPS on a real phone.
 1. Use an Android phone with ARCore support.
 2. Open the site in the Chrome app.
 3. Serve the Vite dev server through HTTPS, such as Cloudflare Tunnel or ngrok.
-4. Tap `Start AR`.
-5. Move the phone slowly until the floor is detected.
-6. Use Radar to walk toward each hidden animal.
-7. When an animal appears, get close, center it, and tap to start the quiz.
+4. Generate topic orbs from the landing prompt.
+5. Tap `Start AR`.
+6. Move the phone slowly until the floor is detected.
+7. Use Radar to walk toward each hidden orb.
+8. When an orb appears, get close, center it, and tap to start the quiz.
 
 ## Project Files
 

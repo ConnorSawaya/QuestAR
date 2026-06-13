@@ -1,5 +1,5 @@
 {
-  "name": "webar-ground-animal",
+  "name": "quest-ar",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -10,7 +10,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@google/model-viewer": "^3.5.0",
+    "dotenv": "^17.4.2",
     "pg": "^8.21.0",
     "three": "^0.163.0"
   },

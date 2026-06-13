@@ -1,18 +1,10 @@
 # Models
 
-Place your 3D model here:
+The current MVP uses procedural Three.js topic orbs, so no external `.glb` model is required.
 
-```text
-public/models/animal.glb
-```
-
-The WebXR scene loads `/models/animal.glb` with Three.js `GLTFLoader`.
-
-If this file is missing, the main AR scene creates a small low-poly fallback animal with Three.js geometry so the demo still runs.
-
-Use optimized mobile-friendly models when possible:
+If future versions add downloadable models, keep them optimized for phones:
 
 - Prefer `.glb`.
 - Keep file size small.
 - Use compressed textures.
-- Keep polygon count reasonable for phones.
+- Keep polygon count reasonable.

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -104,6 +105,23 @@ async function handleApiRequest(request, response, url) {
 
   if (request.method === 'GET' && url.pathname === '/api/leaderboard') {
     sendJson(response, 200, { leaderboard: await getLeaderboard() });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/generate-topic') {
+    const body = await readJsonBody(request);
+    const topic = sanitizeTopic(body.topic);
+    const difficulty = sanitizeDifficulty(body.difficulty);
+    const count = Math.min(Math.max(Number(body.count || 6), 4), 10);
+    const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : 0.7;
+
+    if (!topic) {
+      sendJson(response, 400, { error: 'topic is required' });
+      return;
+    }
+
+    const result = await generateTopicOrbs({ topic, difficulty, count, accuracy });
+    sendJson(response, 200, result);
     return;
   }
 
@@ -385,6 +403,281 @@ function normalizePgProfile(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+async function generateTopicOrbs({ topic, difficulty, count, accuracy }) {
+  const fallback = () => generateFallbackOrbs({ topic, difficulty, count, accuracy });
+
+  if (!process.env.NVIDIA_API_KEY) {
+    return { source: 'fallback', ...fallback() };
+  }
+
+  try {
+    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.NIM_MODEL || 'google/gemma-2-27b-it',
+        temperature: 0.35,
+        max_tokens: 2200,
+        messages: [
+          {
+            role: 'system',
+            content: 'Return only valid JSON. Create concise trivia AR orb data for a mobile educational scavenger hunt.',
+          },
+          {
+            role: 'user',
+            content: `Topic request: ${topic}\nDifficulty: ${difficulty}\nUser accuracy: ${accuracy}\nGenerate ${count} orbs. Each orb needs id, title, category, trait, journalNote, accent hex color, and exactly 3 multiple-choice questions. Each question must have prompt, options array of 3 strings, answer index 0-2. Categories should map to one of chemistry, math, geology, computer-science, biology, history, space, art, literature, general. Make questions harder if accuracy is high. JSON shape: {"topic":"...","summary":"...","orbs":[...]}`,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`NIM ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const content = payload.choices?.[0]?.message?.content || '';
+    const parsed = parseJsonObject(content);
+    const normalized = normalizeGeneratedOrbs(parsed, { topic, difficulty, count });
+    return { source: 'nim', ...normalized };
+  } catch (error) {
+    console.warn('NIM generation failed, using fallback:', error.message);
+    return { source: 'fallback', ...fallback() };
+  }
+}
+
+function parseJsonObject(content) {
+  const trimmed = content.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+
+  if (start === -1 || end === -1) {
+    throw new Error('No JSON object returned');
+  }
+
+  return JSON.parse(trimmed.slice(start, end + 1));
+}
+
+function normalizeGeneratedOrbs(payload, { topic, difficulty, count }) {
+  const orbs = Array.isArray(payload?.orbs) ? payload.orbs : [];
+  const normalized = orbs.slice(0, count).map((orb, index) => normalizeOrb(orb, topic, index)).filter(Boolean);
+
+  if (normalized.length < count) {
+    const fallback = generateFallbackOrbs({ topic, difficulty, count, accuracy: 0.7 }).orbs;
+    normalized.push(...fallback.slice(normalized.length, count));
+  }
+
+  return {
+    topic: String(payload?.topic || topic).slice(0, 80),
+    summary: String(payload?.summary || `A custom ${topic} quest.`).slice(0, 180),
+    orbs: normalized.slice(0, count),
+  };
+}
+
+function normalizeOrb(orb, topic, index) {
+  const questions = Array.isArray(orb?.questions) ? orb.questions.map(normalizeQuestion).filter(Boolean).slice(0, 3) : [];
+
+  if (questions.length < 3) {
+    return null;
+  }
+
+  return {
+    id: sanitizeOrbId(orb.id || `${topic}-${index + 1}`),
+    title: String(orb.title || `${topic} Orb ${index + 1}`).slice(0, 42),
+    category: normalizeCategory(orb.category || topic),
+    accent: /^#[0-9a-fA-F]{6}$/.test(orb.accent || '') ? orb.accent : getCategoryAccent(orb.category || topic),
+    rarity: String(orb.rarity || 'Generated Quest').slice(0, 36),
+    trait: String(orb.trait || 'Topic Signal').slice(0, 36),
+    journalNote: String(orb.journalNote || `A ${topic} fact unlocked from this orb.`).slice(0, 180),
+    questions,
+  };
+}
+
+function normalizeQuestion(question) {
+  const options = Array.isArray(question?.options) ? question.options.map((option) => String(option).slice(0, 80)).slice(0, 3) : [];
+  const answer = Number(question?.answer);
+
+  if (!question?.prompt || options.length !== 3 || !Number.isInteger(answer) || answer < 0 || answer > 2) {
+    return null;
+  }
+
+  return {
+    prompt: String(question.prompt).slice(0, 180),
+    options,
+    answer,
+  };
+}
+
+function generateFallbackOrbs({ topic, difficulty, count, accuracy }) {
+  const category = normalizeCategory(topic);
+  const hard = difficulty === 'Hard' || difficulty === 'Expert' || accuracy >= 0.82;
+  const medium = hard || difficulty === 'Medium' || accuracy >= 0.62;
+  const templates = getFallbackQuestionTemplates(category, topic, { hard, medium });
+  const orbs = Array.from({ length: count }, (_, index) => {
+    const title = getFallbackTitle(category, topic, index);
+    return {
+      id: sanitizeOrbId(`${category}-${Date.now()}-${index}`),
+      title,
+      category,
+      accent: getCategoryAccent(category),
+      rarity: hard ? 'Expert Signal' : medium ? 'Focused Signal' : 'Starter Signal',
+      trait: getCategoryTrait(category),
+      journalNote: `You learned a ${topic} idea from ${title}.`,
+      questions: templates.slice(index * 3, index * 3 + 3).map((question, questionIndex) => question || makeGenericQuestion(topic, index, questionIndex, hard)),
+    };
+  });
+
+  return {
+    topic,
+    summary: `Generated ${count} ${topic} orbs at ${difficulty} difficulty.`,
+    orbs,
+  };
+}
+
+function getFallbackQuestionTemplates(category, topic, { hard, medium }) {
+  const banks = {
+    chemistry: [
+      ['What does pH measure?', ['Acidity', 'Mass', 'Temperature'], 0],
+      ['Which particle has a negative charge?', ['Proton', 'Electron', 'Neutron'], 1],
+      ['What is H2O?', ['Water', 'Salt', 'Oxygen'], 0],
+      ['A catalyst does what?', ['Speeds a reaction', 'Deletes atoms', 'Stops all heat'], 0],
+      ['Which bond shares electrons?', ['Ionic', 'Covalent', 'Metallic only'], 1],
+      ['What is the center of an atom called?', ['Nucleus', 'Shell', 'Ion'], 0],
+    ],
+    math: [
+      ['What is 12 x 8?', ['96', '86', '108'], 0],
+      ['What does slope measure?', ['Steepness', 'Area', 'Volume'], 0],
+      ['What is the square root of 81?', ['7', '9', '11'], 1],
+      ['A prime number has how many positive factors?', ['2', '3', '4'], 0],
+      ['What is 3/4 as a decimal?', ['0.34', '0.75', '1.25'], 1],
+      ['What shape has 8 sides?', ['Hexagon', 'Octagon', 'Decagon'], 1],
+    ],
+    geology: [
+      ['What type of rock forms from cooled lava?', ['Igneous', 'Sedimentary', 'Metamorphic'], 0],
+      ['What scale measures earthquake magnitude?', ['Richter', 'Celsius', 'Beaufort'], 0],
+      ['What is magma called after it reaches the surface?', ['Lava', 'Quartz', 'Clay'], 0],
+      ['What process breaks rocks into smaller pieces?', ['Weathering', 'Orbiting', 'Condensing'], 0],
+      ['Which mineral is common in granite?', ['Quartz', 'Ice', 'Coal'], 0],
+      ['Sedimentary rocks often form in what?', ['Layers', 'Clouds', 'Stars'], 0],
+    ],
+    'computer-science': [
+      ['What does CPU stand for?', ['Central Processing Unit', 'Code Power Utility', 'Computer Pixel Unit'], 0],
+      ['Which value is boolean?', ['True', '42.5', 'Paragraph'], 0],
+      ['What stores key-value pairs?', ['Map', 'Loop', 'Pixel'], 0],
+      ['What does an algorithm describe?', ['Steps to solve a problem', 'A screen color', 'A network cable'], 0],
+      ['Which structure is first-in, first-out?', ['Queue', 'Stack', 'Tree root'], 0],
+      ['What does HTML structure?', ['Web content', 'Database indexes', 'Battery voltage'], 0],
+    ],
+    biology: [
+      ['What do plants use for photosynthesis?', ['Sunlight', 'Plastic', 'Sound'], 0],
+      ['DNA stores what?', ['Genetic instructions', 'Blood pressure', 'Heat only'], 0],
+      ['What organ pumps blood?', ['Heart', 'Lung', 'Stomach'], 0],
+      ['Cells are surrounded by what?', ['Membrane', 'Circuit', 'Crust'], 0],
+      ['What gas do humans breathe in?', ['Oxygen', 'Helium', 'Methane'], 0],
+      ['What is an ecosystem?', ['Living and nonliving interactions', 'One single bone', 'A math equation'], 0],
+    ],
+  };
+  const selected = banks[category] || banks[normalizeCategory(topic)] || [
+    [`What is the main idea of ${topic}?`, ['A key concept', 'A random guess', 'An unrelated fact'], 0],
+    [`Why study ${topic}?`, ['To understand patterns', 'To avoid learning', 'To erase questions'], 0],
+    [`What helps you master ${topic}?`, ['Practice', 'Ignoring feedback', 'Random clicking'], 0],
+  ];
+  const repeated = [];
+
+  while (repeated.length < 30) {
+    selected.forEach(([prompt, options, answer]) => repeated.push({
+      prompt: hard ? `${prompt} Choose the most precise answer.` : medium ? `${prompt} Think carefully.` : prompt,
+      options,
+      answer,
+    }));
+  }
+
+  return repeated;
+}
+
+function makeGenericQuestion(topic, index, questionIndex, hard) {
+  return {
+    prompt: hard ? `Which choice best explains ${topic} concept ${index + 1}.${questionIndex + 1}?` : `Which choice matches ${topic}?`,
+    options: ['The best topic match', 'An unrelated idea', 'A random label'],
+    answer: 0,
+  };
+}
+
+function getFallbackTitle(category, topic, index) {
+  const names = {
+    chemistry: ['Flask Orb', 'Atom Orb', 'Reaction Orb', 'Molecule Orb', 'pH Orb', 'Catalyst Orb'],
+    math: ['Plus Orb', 'Graph Orb', 'Prime Orb', 'Fraction Orb', 'Geometry Orb', 'Algebra Orb'],
+    geology: ['Granite Orb', 'Fossil Orb', 'Volcano Orb', 'Quartz Orb', 'Fault Orb', 'Layer Orb'],
+    'computer-science': ['Code Orb', 'Laptop Orb', 'Binary Orb', 'Network Orb', 'Array Orb', 'Algorithm Orb'],
+    biology: ['Cell Orb', 'DNA Orb', 'Leaf Orb', 'Heart Orb', 'Ecosystem Orb', 'Neuron Orb'],
+    history: ['Timeline Orb', 'Artifact Orb', 'Empire Orb', 'Revolution Orb', 'Map Orb', 'Archive Orb'],
+    space: ['Planet Orb', 'Comet Orb', 'Galaxy Orb', 'Rocket Orb', 'Orbit Orb', 'Star Orb'],
+    art: ['Palette Orb', 'Canvas Orb', 'Sculpture Orb', 'Color Orb', 'Gallery Orb', 'Brush Orb'],
+    literature: ['Story Orb', 'Poetry Orb', 'Theme Orb', 'Symbol Orb', 'Plot Orb', 'Character Orb'],
+  };
+  return (names[category] || names.general || [`${topic} Orb`])[index % (names[category]?.length || 1)] || `${topic} Orb ${index + 1}`;
+}
+
+function getCategoryTrait(category) {
+  return {
+    chemistry: 'Lab Signal',
+    math: 'Pattern Signal',
+    geology: 'Earth Signal',
+    'computer-science': 'Code Signal',
+    biology: 'Life Signal',
+    history: 'Archive Signal',
+    space: 'Orbit Signal',
+    art: 'Studio Signal',
+    literature: 'Story Signal',
+  }[normalizeCategory(category)] || 'Topic Signal';
+}
+
+function getCategoryAccent(category) {
+  return {
+    chemistry: '#79f0c2',
+    math: '#8ad7ff',
+    geology: '#d6a86f',
+    'computer-science': '#9fb7ff',
+    biology: '#8ef7a2',
+    history: '#ffcf7d',
+    space: '#c6a4ff',
+    art: '#ff8fb8',
+    literature: '#f8fbff',
+    general: '#79f0c2',
+  }[normalizeCategory(category)] || '#79f0c2';
+}
+
+function normalizeCategory(value) {
+  const text = String(value || '').toLowerCase();
+
+  if (/chem|atom|molecule|reaction|flask/.test(text)) return 'chemistry';
+  if (/math|algebra|geometry|calculus|number|equation/.test(text)) return 'math';
+  if (/geo|rock|earth|volcano|mineral|fossil/.test(text)) return 'geology';
+  if (/computer|code|program|software|algorithm|ai|data/.test(text)) return 'computer-science';
+  if (/bio|cell|animal|plant|life|dna/.test(text)) return 'biology';
+  if (/history|war|empire|ancient|civilization/.test(text)) return 'history';
+  if (/space|planet|star|galaxy|astronomy/.test(text)) return 'space';
+  if (/art|paint|music|design|color/.test(text)) return 'art';
+  if (/literature|book|poem|story|novel/.test(text)) return 'literature';
+  return 'general';
+}
+
+function sanitizeTopic(value) {
+  return String(value || '').replace(/[<>]/g, '').trim().slice(0, 140);
+}
+
+function sanitizeDifficulty(value) {
+  const difficulty = String(value || '').trim();
+  return ['Easy', 'Medium', 'Hard', 'Expert'].includes(difficulty) ? difficulty : 'Easy';
+}
+
+function sanitizeOrbId(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `orb-${Date.now()}`;
 }
 
 async function readLocalDb() {

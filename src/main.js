@@ -4,7 +4,7 @@ import * as THREE from 'three';
 
 const RETICLE_RADIUS = 0.16;
 const COLLECTIBLE_HEIGHT = 0.56;
-const TOTAL_COLLECTIBLES = 3;
+let TOTAL_COLLECTIBLES = 6;
 const REVEAL_DISTANCE_METERS = 4;
 const INTERACTION_DISTANCE_METERS = 3;
 const DB_NAME = 'quest-ar-progress';
@@ -14,83 +14,137 @@ const PLAYER_ID_KEY = 'quest-ar-player-id';
 const PLAYER_NAME_KEY = 'quest-ar-player-name';
 const LOCAL_PROFILE_KEY = 'quest-ar-local-profile';
 
-const TRIVIA_COLLECTIBLES = [
+let TRIVIA_COLLECTIBLES = [
   {
-    id: 'panda',
-    accent: '#d8f7ff',
-    title: 'Panda',
-    emoji: 'P',
-    rarity: 'Bamboo Scout',
-    trait: 'Quiet Walker',
-    journalNote: 'A gentle panda sighting logged after tracking its quiet signal through the route.',
+    id: 'starter-chemistry-flask',
+    accent: '#79f0c2',
+    title: 'Flask Orb',
+    category: 'chemistry',
+    rarity: 'Starter Signal',
+    trait: 'Lab Signal',
+    journalNote: 'You learned that chemistry explains matter, reactions, and the tools scientists use in labs.',
     questions: [
       {
-        prompt: 'What food are pandas most famous for eating?',
-        options: ['Bamboo', 'Acorns', 'Seaweed'],
+        prompt: 'What does pH measure?',
+        options: ['Acidity', 'Mass', 'Temperature'],
         answer: 0,
       },
       {
-        prompt: 'Pandas are native to which country?',
-        options: ['Brazil', 'China', 'Canada'],
+        prompt: 'Which particle has a negative charge?',
+        options: ['Proton', 'Electron', 'Neutron'],
         answer: 1,
       },
       {
-        prompt: 'What colors are giant pandas?',
-        options: ['Black and white', 'Blue and gray', 'Red and gold'],
+        prompt: 'What is H2O?',
+        options: ['Water', 'Salt', 'Oxygen'],
         answer: 0,
       },
     ],
   },
   {
-    id: 'lion',
-    accent: '#ffb35c',
-    title: 'Lion',
-    emoji: 'L',
-    rarity: 'Savanna Badge',
-    trait: 'Bold Roar',
-    journalNote: 'A lion sighting earned by following a bold signal across the open route.',
+    id: 'starter-math-plus',
+    accent: '#8ad7ff',
+    title: 'Plus Orb',
+    category: 'math',
+    rarity: 'Starter Signal',
+    trait: 'Pattern Signal',
+    journalNote: 'You learned that math uses patterns, operations, and structure to solve problems.',
     questions: [
       {
-        prompt: 'What is a group of lions called?',
-        options: ['A pack', 'A pride', 'A herd'],
-        answer: 1,
-      },
-      {
-        prompt: 'Which lion is known for having a large mane?',
-        options: ['Adult male', 'Cub', 'Lioness'],
+        prompt: 'What is 12 x 8?',
+        options: ['96', '86', '108'],
         answer: 0,
       },
       {
-        prompt: 'Lions are often called the king of what?',
-        options: ['The jungle', 'The ocean', 'The mountains'],
+        prompt: 'What is the square root of 81?',
+        options: ['7', '9', '11'],
+        answer: 1,
+      },
+      {
+        prompt: 'A prime number has how many positive factors?',
+        options: ['2', '3', '4'],
         answer: 0,
       },
     ],
   },
   {
-    id: 'elephant',
+    id: 'starter-geology-rock',
+    accent: '#d6a86f',
+    title: 'Granite Orb',
+    category: 'geology',
+    rarity: 'Starter Signal',
+    trait: 'Earth Signal',
+    journalNote: 'You learned that geology studies rocks, minerals, volcanoes, and Earth processes.',
+    questions: [
+      {
+        prompt: 'What type of rock forms from cooled lava?',
+        options: ['Igneous', 'Sedimentary', 'Metamorphic'],
+        answer: 0,
+      },
+      {
+        prompt: 'What scale measures earthquake magnitude?',
+        options: ['Richter', 'Celsius', 'Beaufort'],
+        answer: 0,
+      },
+      {
+        prompt: 'What is magma called after it reaches the surface?',
+        options: ['Lava', 'Quartz', 'Clay'],
+        answer: 0,
+      },
+    ],
+  },
+  {
+    id: 'starter-cs-laptop',
     accent: '#9fb7ff',
-    title: 'Elephant',
-    emoji: 'E',
-    rarity: 'Trail Giant',
-    trait: 'Heavy Step',
-    journalNote: 'An elephant sighting recorded after walking out to the farthest signal.',
+    title: 'Code Orb',
+    category: 'computer-science',
+    rarity: 'Starter Signal',
+    trait: 'Code Signal',
+    journalNote: 'You learned that computer science uses algorithms, data, and logic to build systems.',
     questions: [
       {
-        prompt: 'What long body part do elephants use to grab things?',
-        options: ['Trunk', 'Tail', 'Mane'],
+        prompt: 'What does CPU stand for?',
+        options: ['Central Processing Unit', 'Code Power Utility', 'Computer Pixel Unit'],
         answer: 0,
       },
       {
-        prompt: 'Elephants are known for having very large what?',
-        options: ['Wings', 'Ears', 'Claws'],
-        answer: 1,
-      },
-      {
-        prompt: 'Which land animal is the largest?',
-        options: ['Elephant', 'Wolf', 'Kangaroo'],
+        prompt: 'Which value is boolean?',
+        options: ['True', '42.5', 'Paragraph'],
         answer: 0,
       },
+      {
+        prompt: 'What does an algorithm describe?',
+        options: ['Steps to solve a problem', 'A screen color', 'A network cable'],
+        answer: 0,
+      },
+    ],
+  },
+  {
+    id: 'starter-biology-cell',
+    accent: '#8ef7a2',
+    title: 'Cell Orb',
+    category: 'biology',
+    rarity: 'Starter Signal',
+    trait: 'Life Signal',
+    journalNote: 'You learned that biology studies life, cells, organisms, and ecosystems.',
+    questions: [
+      { prompt: 'What do plants use for photosynthesis?', options: ['Sunlight', 'Plastic', 'Sound'], answer: 0 },
+      { prompt: 'DNA stores what?', options: ['Genetic instructions', 'Blood pressure', 'Heat only'], answer: 0 },
+      { prompt: 'What organ pumps blood?', options: ['Heart', 'Lung', 'Stomach'], answer: 0 },
+    ],
+  },
+  {
+    id: 'starter-space-planet',
+    accent: '#c6a4ff',
+    title: 'Planet Orb',
+    category: 'space',
+    rarity: 'Starter Signal',
+    trait: 'Orbit Signal',
+    journalNote: 'You learned that space science studies planets, stars, gravity, and galaxies.',
+    questions: [
+      { prompt: 'Which planet is known as the Red Planet?', options: ['Mars', 'Venus', 'Jupiter'], answer: 0 },
+      { prompt: 'What force keeps planets in orbit?', options: ['Gravity', 'Friction', 'Sound'], answer: 0 },
+      { prompt: 'What is the Sun?', options: ['A star', 'A moon', 'A comet'], answer: 0 },
     ],
   },
 ];
@@ -103,6 +157,11 @@ const gameGrip = document.querySelector('#game-grip');
 const gameCount = document.querySelector('#game-count');
 const gameHint = document.querySelector('#game-hint');
 const gameList = document.querySelector('#game-list');
+const topicForm = document.querySelector('#topic-form');
+const topicInput = document.querySelector('#topic-input');
+const topicMessages = document.querySelector('#topic-messages');
+const topicGenerate = document.querySelector('#topic-generate');
+const topicStatus = document.querySelector('#topic-status');
 const radarSummary = document.querySelector('#radar-summary');
 const radarList = document.querySelector('#radar-list');
 const journalSummary = document.querySelector('#journal-summary');
@@ -117,6 +176,7 @@ const profileNearest = document.querySelector('#profile-nearest');
 const profileRank = document.querySelector('#profile-rank');
 const profileDifficulty = document.querySelector('#profile-difficulty');
 const leaderboardList = document.querySelector('#leaderboard-list');
+const regenerateTopic = document.querySelector('#regenerate-topic');
 const tabBar = document.querySelector('#tab-bar');
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const closestArrow = document.querySelector('#closest-arrow');
@@ -151,8 +211,15 @@ let hasDepthOcclusion = false;
 let activeMode = 'hunt';
 let lastHudRefreshMs = 0;
 let startInteractionInFlight = false;
+let lastFloorY = 0;
+let orbWaveIndex = 0;
 let savedAnimalProgress = {};
 let selectedJournalAnimalId = TRIVIA_COLLECTIBLES[0].id;
+let currentTopicPrompt = 'general science';
+let currentTopicSummary = 'Starter science, math, geology, coding, biology, and space quest.';
+let topicReady = false;
+let arSupported = false;
+let generatingTopic = false;
 let playerId = getOrCreatePlayerId();
 let playerName = getOrCreatePlayerName();
 let playerProfile = getDefaultProfile();
@@ -181,6 +248,8 @@ startButton.addEventListener('pointerup', handleStartButtonInteraction);
 startButton.addEventListener('touchend', handleStartButtonInteraction, { passive: false });
 startButton.addEventListener('click', handleStartButtonInteraction);
 quizClose.addEventListener('click', closeQuizPanel);
+topicForm.addEventListener('submit', handleTopicSubmit);
+regenerateTopic.addEventListener('click', openTopicRegenerator);
 
 function openProgressDb() {
   return new Promise((resolve, reject) => {
@@ -250,6 +319,137 @@ function transactionToPromise(transaction) {
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });
+}
+
+function updateStartButtonState() {
+  if (currentSession) {
+    startButton.disabled = false;
+    startButton.textContent = 'Exit AR';
+    return;
+  }
+
+  if (!arSupported) {
+    startButton.disabled = true;
+    startButton.textContent = 'Checking AR...';
+    return;
+  }
+
+  if (!topicReady) {
+    startButton.disabled = true;
+    startButton.textContent = 'Generate first';
+    return;
+  }
+
+  startButton.disabled = false;
+  startButton.textContent = 'Start AR';
+}
+
+async function handleTopicSubmit(event) {
+  event.preventDefault();
+
+  const topic = topicInput.value.trim();
+
+  if (!topic || generatingTopic) {
+    return;
+  }
+
+  await generateTopicQuest(topic, true);
+}
+
+async function generateTopicQuest(topic, resetExisting) {
+  generatingTopic = true;
+  topicGenerate.disabled = true;
+  topicStatus.textContent = 'Generating topic orbs with AI...';
+  appendTopicMessage('You', topic);
+  appendTopicMessage('Quest AI', 'Building your AR quest.');
+
+  try {
+    const payload = await postApi('/api/generate-topic', {
+      topic,
+      count: 6,
+      difficulty: playerProfile.difficulty,
+      accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
+    });
+    applyGeneratedTopic(payload, resetExisting);
+    topicStatus.textContent = `${payload.orbs.length} ${payload.topic} orbs ready. You can Start AR.`;
+    appendTopicMessage('Quest AI', payload.summary || `Generated ${payload.orbs.length} orbs.`);
+  } catch (error) {
+    topicStatus.textContent = 'Could not generate topic right now. Try again.';
+    appendTopicMessage('Quest AI', `Generation failed: ${error.message}`);
+  } finally {
+    generatingTopic = false;
+    topicGenerate.disabled = false;
+    updateStartButtonState();
+  }
+}
+
+function appendTopicMessage(sender, message) {
+  const entry = document.createElement('p');
+  const strong = document.createElement('strong');
+  strong.textContent = `${sender}: `;
+  entry.append(strong, message);
+  topicMessages.appendChild(entry);
+  topicMessages.scrollTop = topicMessages.scrollHeight;
+}
+
+function applyGeneratedTopic(payload, resetExisting) {
+  const orbs = Array.isArray(payload?.orbs) ? payload.orbs.map(normalizeGeneratedOrbForClient).filter(Boolean) : [];
+
+  if (!orbs.length) {
+    throw new Error('No valid orbs returned.');
+  }
+
+  TRIVIA_COLLECTIBLES = orbs;
+  TOTAL_COLLECTIBLES = orbs.length;
+  selectedJournalAnimalId = orbs[0].id;
+  currentTopicPrompt = payload.topic || currentTopicPrompt;
+  currentTopicSummary = payload.summary || currentTopicSummary;
+  topicReady = true;
+
+  if (resetExisting && collectiblesSpawned) {
+    resetCollectibles();
+  }
+
+  updateCollectionHud();
+  updateModePanels();
+}
+
+function normalizeGeneratedOrbForClient(orb) {
+  if (!orb?.id || !orb?.title || !Array.isArray(orb.questions) || orb.questions.length < 3) {
+    return null;
+  }
+
+  return {
+    ...orb,
+    category: normalizeClientCategory(orb.category || orb.title),
+    accent: /^#[0-9a-fA-F]{6}$/.test(orb.accent || '') ? orb.accent : '#79f0c2',
+    rarity: orb.rarity || 'Generated Quest',
+    trait: orb.trait || 'Topic Signal',
+    journalNote: orb.journalNote || `You learned a ${currentTopicPrompt} idea from this orb.`,
+  };
+}
+
+function normalizeClientCategory(value) {
+  const text = String(value || '').toLowerCase();
+  if (/chem|atom|molecule|reaction|flask/.test(text)) return 'chemistry';
+  if (/math|algebra|geometry|calculus|number|equation/.test(text)) return 'math';
+  if (/geo|rock|earth|volcano|mineral|fossil/.test(text)) return 'geology';
+  if (/computer|code|program|software|algorithm|ai|data/.test(text)) return 'computer-science';
+  if (/bio|cell|plant|life|dna/.test(text)) return 'biology';
+  if (/history|war|empire|ancient|civilization/.test(text)) return 'history';
+  if (/space|planet|star|galaxy|astronomy/.test(text)) return 'space';
+  if (/art|paint|music|design|color/.test(text)) return 'art';
+  if (/literature|book|poem|story|novel/.test(text)) return 'literature';
+  return 'general';
+}
+
+async function openTopicRegenerator() {
+  if (currentSession) {
+    await currentSession.end();
+  }
+
+  topicInput.focus();
+  topicStatus.textContent = 'Enter a new topic to regenerate your AR orbs.';
 }
 
 function getOrCreatePlayerId() {
@@ -504,6 +704,11 @@ function handleStartButtonInteraction(event) {
     return;
   }
 
+  if (!topicReady && !currentSession) {
+    topicStatus.textContent = 'Generate topic orbs before entering AR.';
+    return;
+  }
+
   startInteractionInFlight = true;
   statusText.textContent = currentSession ? 'Closing AR session...' : 'Start button pressed. Opening AR...';
   void startARSession().finally(() => {
@@ -559,11 +764,11 @@ async function checkWebXRSupport() {
       return;
     }
 
-    startButton.disabled = false;
-    startButton.textContent = 'Start AR';
+    arSupported = true;
+    updateStartButtonState();
 
     if (!/GSA|; wv\)/i.test(userAgent)) {
-      statusText.textContent = 'Ready. Start AR and scan the floor. The hidden animals will reveal only when you walk close.';
+      statusText.textContent = 'Generate a topic quest, then Start AR and scan the floor.';
     }
   } catch (error) {
     showUnsupported(`Could not check WebXR support: ${error.message}`);
@@ -597,11 +802,10 @@ async function startARSession() {
     lastHudRefreshMs = 0;
     setActiveMode('hunt');
     startButton.disabled = false;
-    startButton.textContent = 'Exit AR';
+    updateStartButtonState();
     statusText.textContent = 'Move your phone slowly to find the floor.';
   } catch (error) {
-    startButton.disabled = false;
-    startButton.textContent = 'Start AR';
+    updateStartButtonState();
     statusText.textContent = `AR could not start: ${error.message}`;
   }
 }
@@ -642,8 +846,7 @@ function endARSession() {
   tabBar.classList.add('hidden');
   renderer.setAnimationLoop(null);
   document.body.classList.remove('is-ar-active');
-  startButton.disabled = false;
-  startButton.textContent = 'Start AR';
+  updateStartButtonState();
   statusText.textContent = 'AR ended. Start again to deploy the trivia hunt.';
 }
 
@@ -702,7 +905,7 @@ function handleARSelect() {
   }
 
   if (!collectiblesSpawned) {
-    statusText.textContent = stableFloorFrames > 0 ? 'Hold steady. The hidden animals are being placed across the route.' : 'Move your phone slowly until the floor is found.';
+    statusText.textContent = stableFloorFrames > 0 ? 'Hold steady. The hidden topic orbs are being placed across the route.' : 'Move your phone slowly until the floor is found.';
     return;
   }
 
@@ -713,10 +916,10 @@ function handleARSelect() {
     if (nearest) {
       const nearestDistance = getCollectibleDistance(nearest);
       statusText.textContent = nearestDistance > REVEAL_DISTANCE_METERS
-        ? `No animal visible yet. Closest signal is ${formatDistance(nearestDistance)} away; walk ${formatDistance(nearestDistance - REVEAL_DISTANCE_METERS)} closer to reveal it.`
-        : 'An animal is nearby. Look around, center the visible animal, then tap it.';
+        ? `No orb visible yet. Closest signal is ${formatDistance(nearestDistance)} away; walk ${formatDistance(nearestDistance - REVEAL_DISTANCE_METERS)} closer to reveal it.`
+        : 'An orb is nearby. Look around, center the visible orb, then tap it.';
     } else {
-      statusText.textContent = 'All animals collected.';
+      statusText.textContent = 'All orbs completed.';
     }
     return;
   }
@@ -734,15 +937,20 @@ function handleARSelect() {
 }
 
 function spawnCollectiblesFromReticle() {
-  if (!reticle.visible || collectiblesSpawned) {
+  if (!reticle.visible || collectiblesSpawned || !topicReady) {
     return;
   }
 
   resetCollectibles();
 
   const floorPosition = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
+  lastFloorY = floorPosition.y;
+  spawnCollectiblesNearPlayer(floorPosition.y);
+}
+
+function spawnCollectiblesNearPlayer(floorY) {
   camera.getWorldPosition(cameraWorldPosition);
-  const playerBase = new THREE.Vector3(cameraWorldPosition.x, floorPosition.y, cameraWorldPosition.z);
+  const playerBase = new THREE.Vector3(cameraWorldPosition.x, floorY, cameraWorldPosition.z);
   const heading = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   heading.y = 0;
 
@@ -752,19 +960,15 @@ function spawnCollectiblesFromReticle() {
 
   heading.normalize();
   const right = new THREE.Vector3().crossVectors(heading, upAxis).normalize().negate();
-  const spawnSlots = shuffleArray([
-    { angle: -1.25, distance: 6.2 },
-    { angle: 0.05, distance: 10.4 },
-    { angle: 1.25, distance: 14.6 },
-  ]);
+  const spawnSlots = shuffleArray(createSpawnSlots(TOTAL_COLLECTIBLES));
 
   collectibles = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item, index) => {
-    const slot = spawnSlots[index];
+    const slot = spawnSlots[index % spawnSlots.length];
     const angle = slot.angle + (Math.random() - 0.5) * 0.08;
     const distance = slot.distance + (Math.random() - 0.5) * 0.24;
     const offset = heading.clone().multiplyScalar(Math.cos(angle) * distance).add(right.clone().multiplyScalar(Math.sin(angle) * distance));
     const position = playerBase.clone().add(offset);
-    position.y = floorPosition.y;
+    position.y = floorY;
 
     const collectible = createCollectible(item, position);
     scene.add(collectible.group);
@@ -775,7 +979,17 @@ function spawnCollectiblesFromReticle() {
   stableFloorFrames = 0;
   reticle.visible = false;
   updateCollectionHud();
-  statusText.textContent = 'Three hidden animals spawned across the route. Use Radar distance and walk close until an animal appears.';
+  statusText.textContent = `${TOTAL_COLLECTIBLES} topic orbs spawned across the route. Follow the arrow and walk close until an orb appears.`;
+}
+
+function createSpawnSlots(count) {
+  const slotCount = Math.max(count, 1);
+  return Array.from({ length: slotCount }, (_, index) => {
+    const progress = slotCount === 1 ? 0.5 : index / (slotCount - 1);
+    const angle = THREE.MathUtils.lerp(-1.05, 1.05, progress) + (index % 2 === 0 ? -0.18 : 0.18);
+    const distance = 5.4 + index * 2.2;
+    return { angle, distance };
+  });
 }
 
 function createCollectible(item, groundPosition) {
@@ -812,9 +1026,9 @@ function createCollectible(item, groundPosition) {
   beacon.position.y = 0.86;
   group.add(beacon);
 
-  const animalModel = createAnimalModel(item);
-  animalModel.scale.setScalar(0.72);
-  floatRig.add(animalModel);
+  const orbModel = createTopicOrbModel(item);
+  orbModel.scale.setScalar(0.76);
+  floatRig.add(orbModel);
 
   const haloMaterial = new THREE.MeshBasicMaterial({
     color: item.accent,
@@ -850,7 +1064,7 @@ function createCollectible(item, groundPosition) {
     halo,
     hitArea,
     item,
-    animalModel,
+    orbModel,
     questionIndex: Math.min(progress.questionIndex || 0, item.questions.length),
     revealed: Boolean(progress.revealed || progress.collected),
     worldBaseY: COLLECTIBLE_HEIGHT,
@@ -858,77 +1072,102 @@ function createCollectible(item, groundPosition) {
   };
 }
 
-function createAnimalModel(item) {
-  if (item.id === 'panda') {
-    return createPandaModel();
+function createTopicOrbModel(item) {
+  const group = new THREE.Group();
+  const accent = new THREE.Color(item.accent || '#79f0c2');
+  const coreMaterial = new THREE.MeshStandardMaterial({
+    color: accent,
+    emissive: accent,
+    emissiveIntensity: 0.08,
+    roughness: 0.42,
+    metalness: 0.12,
+    transparent: true,
+    opacity: 0.92,
+  });
+  const symbolMaterial = new THREE.MeshStandardMaterial({ color: 0xf8fbff, emissive: accent, emissiveIntensity: 0.16, roughness: 0.48 });
+  const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x071020, roughness: 0.66 });
+
+  addSphere(group, coreMaterial, [0, 0.12, 0], [0.34, 0.34, 0.34]);
+
+  const shell = new THREE.Mesh(
+    new THREE.TorusGeometry(0.39, 0.012, 12, 72),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.88 }),
+  );
+  shell.rotation.set(Math.PI / 2, 0.2, 0.15);
+  shell.position.y = 0.12;
+  group.add(shell);
+
+  addCategoryGlyph(group, item.category, symbolMaterial, darkMaterial, accent);
+  return group;
+}
+
+function addCategoryGlyph(group, category, material, darkMaterial, accent) {
+  switch (normalizeClientCategory(category)) {
+    case 'chemistry':
+      addCylinder(group, material, [0, 0.29, 0.26], [0.035, 0.035, 0.22], 0, 0, 0);
+      addCylinder(group, material, [0, 0.13, 0.27], [0.12, 0.12, 0.2], 0, 0, 0);
+      addSphere(group, new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.18, roughness: 0.35 }), [0, 0.05, 0.27], [0.1, 0.04, 0.1]);
+      break;
+    case 'math':
+      addBox(group, material, [0, 0.13, 0.32], [0.32, 0.055, 0.055]);
+      addBox(group, material, [0, 0.13, 0.32], [0.055, 0.32, 0.055]);
+      break;
+    case 'geology':
+      addRock(group, material, [0, 0.12, 0.28]);
+      break;
+    case 'computer-science':
+      addBox(group, darkMaterial, [0, 0.14, 0.29], [0.3, 0.18, 0.035]);
+      addBox(group, material, [0, 0.25, 0.28], [0.24, 0.015, 0.035]);
+      addBox(group, material, [0, 0.02, 0.32], [0.36, 0.035, 0.18]);
+      break;
+    case 'biology':
+      for (let index = 0; index < 6; index += 1) {
+        const y = -0.04 + index * 0.07;
+        const x = Math.sin(index * 1.2) * 0.12;
+        addSphere(group, material, [x, y + 0.1, 0.32], [0.035, 0.035, 0.035]);
+        addSphere(group, material, [-x, y + 0.1, 0.32], [0.035, 0.035, 0.035]);
+        addCylinder(group, material, [0, y + 0.1, 0.32], [0.012, 0.012, Math.max(Math.abs(x) * 2, 0.06)], Math.PI / 2, 0, Math.PI / 2);
+      }
+      break;
+    case 'space': {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.018, 12, 54), material);
+      ring.rotation.set(Math.PI / 2.9, 0, -0.38);
+      ring.position.set(0, 0.12, 0.28);
+      group.add(ring);
+      addSphere(group, material, [0, 0.12, 0.32], [0.12, 0.12, 0.12]);
+      break;
+    }
+    case 'history':
+      addCylinder(group, material, [0, 0.1, 0.3], [0.06, 0.06, 0.28], 0, 0, 0);
+      addBox(group, material, [0, 0.27, 0.3], [0.28, 0.04, 0.08]);
+      addBox(group, material, [0, -0.07, 0.3], [0.3, 0.04, 0.09]);
+      break;
+    case 'art':
+      addSphere(group, material, [0, 0.12, 0.29], [0.18, 0.12, 0.04]);
+      addSphere(group, darkMaterial, [0.08, 0.17, 0.34], [0.025, 0.025, 0.012]);
+      addSphere(group, darkMaterial, [-0.05, 0.09, 0.34], [0.02, 0.02, 0.012]);
+      addSphere(group, darkMaterial, [0.01, 0.2, 0.34], [0.018, 0.018, 0.012]);
+      break;
+    case 'literature':
+      addBox(group, darkMaterial, [-0.06, 0.12, 0.3], [0.15, 0.24, 0.035]);
+      addBox(group, material, [0.06, 0.12, 0.31], [0.15, 0.24, 0.035]);
+      addBox(group, material, [0, 0.12, 0.34], [0.022, 0.24, 0.02]);
+      break;
+    default:
+      addBox(group, material, [0, 0.13, 0.31], [0.24, 0.06, 0.06]);
+      addBox(group, material, [0, 0.13, 0.31], [0.06, 0.24, 0.06]);
+      addBox(group, material, [0, 0.13, 0.31], [0.06, 0.06, 0.24]);
+      break;
   }
-
-  if (item.id === 'lion') {
-    return createLionModel();
-  }
-
-  return createElephantModel();
 }
 
-function createPandaModel() {
-  const group = new THREE.Group();
-  const white = new THREE.MeshStandardMaterial({ color: 0xf6f8ff, roughness: 0.62 });
-  const black = new THREE.MeshStandardMaterial({ color: 0x080b10, roughness: 0.68 });
-
-  addSphere(group, white, [0, 0.12, 0], [0.36, 0.3, 0.28]);
-  addSphere(group, white, [0, 0.47, 0.03], [0.25, 0.24, 0.23]);
-  addSphere(group, black, [-0.17, 0.66, 0.02], [0.1, 0.1, 0.08]);
-  addSphere(group, black, [0.17, 0.66, 0.02], [0.1, 0.1, 0.08]);
-  addSphere(group, black, [-0.09, 0.5, 0.23], [0.045, 0.065, 0.025]);
-  addSphere(group, black, [0.09, 0.5, 0.23], [0.045, 0.065, 0.025]);
-  addSphere(group, black, [0, 0.41, 0.25], [0.035, 0.025, 0.02]);
-  addSphere(group, black, [-0.22, 0.13, 0.09], [0.09, 0.2, 0.09]);
-  addSphere(group, black, [0.22, 0.13, 0.09], [0.09, 0.2, 0.09]);
-  addSphere(group, black, [-0.15, -0.12, 0.08], [0.11, 0.08, 0.12]);
-  addSphere(group, black, [0.15, -0.12, 0.08], [0.11, 0.08, 0.12]);
-  return group;
-}
-
-function createLionModel() {
-  const group = new THREE.Group();
-  const fur = new THREE.MeshStandardMaterial({ color: 0xffb35c, roughness: 0.58 });
-  const mane = new THREE.MeshStandardMaterial({ color: 0x8a431f, roughness: 0.72 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x1b0e08, roughness: 0.65 });
-
-  addSphere(group, fur, [0, 0.12, 0], [0.38, 0.24, 0.22]);
-  addSphere(group, mane, [0, 0.44, 0.04], [0.29, 0.28, 0.24]);
-  addSphere(group, fur, [0, 0.43, 0.15], [0.19, 0.17, 0.14]);
-  addSphere(group, fur, [-0.17, 0.58, 0.06], [0.08, 0.08, 0.05]);
-  addSphere(group, fur, [0.17, 0.58, 0.06], [0.08, 0.08, 0.05]);
-  addSphere(group, dark, [-0.07, 0.46, 0.28], [0.018, 0.018, 0.012]);
-  addSphere(group, dark, [0.07, 0.46, 0.28], [0.018, 0.018, 0.012]);
-  addSphere(group, dark, [0, 0.39, 0.29], [0.035, 0.025, 0.018]);
-  addSphere(group, fur, [-0.24, -0.08, 0.1], [0.07, 0.17, 0.07]);
-  addSphere(group, fur, [0.24, -0.08, 0.1], [0.07, 0.17, 0.07]);
-  addSphere(group, fur, [-0.13, -0.11, -0.08], [0.07, 0.16, 0.07]);
-  addSphere(group, fur, [0.13, -0.11, -0.08], [0.07, 0.16, 0.07]);
-  addTail(group, fur, [0, 0.15, -0.24], -0.2, 0.28);
-  return group;
-}
-
-function createElephantModel() {
-  const group = new THREE.Group();
-  const skin = new THREE.MeshStandardMaterial({ color: 0x9fb7ff, roughness: 0.7 });
-  const ear = new THREE.MeshStandardMaterial({ color: 0x7f94d6, roughness: 0.72 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x071020, roughness: 0.62 });
-
-  addSphere(group, skin, [0, 0.16, 0], [0.42, 0.28, 0.24]);
-  addSphere(group, skin, [0, 0.48, 0.08], [0.25, 0.22, 0.2]);
-  addSphere(group, ear, [-0.25, 0.48, 0.03], [0.13, 0.19, 0.045]);
-  addSphere(group, ear, [0.25, 0.48, 0.03], [0.13, 0.19, 0.045]);
-  addCylinder(group, skin, [0, 0.26, 0.28], [0.055, 0.075, 0.35], Math.PI / 2, 0, 0);
-  addSphere(group, dark, [-0.07, 0.51, 0.28], [0.018, 0.018, 0.012]);
-  addSphere(group, dark, [0.07, 0.51, 0.28], [0.018, 0.018, 0.012]);
-  addCylinder(group, skin, [-0.24, -0.11, 0.08], [0.07, 0.07, 0.24], 0, 0, 0);
-  addCylinder(group, skin, [0.24, -0.11, 0.08], [0.07, 0.07, 0.24], 0, 0, 0);
-  addCylinder(group, skin, [-0.16, -0.11, -0.13], [0.07, 0.07, 0.24], 0, 0, 0);
-  addCylinder(group, skin, [0.16, -0.11, -0.13], [0.07, 0.07, 0.24], 0, 0, 0);
-  return group;
+function addRock(group, material, position) {
+  const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(0.18, 0), material);
+  mesh.position.set(...position);
+  mesh.scale.set(1.1, 0.82, 0.72);
+  mesh.rotation.set(0.35, 0.2, -0.18);
+  group.add(mesh);
+  return mesh;
 }
 
 function addSphere(group, material, position, scale) {
@@ -948,10 +1187,12 @@ function addCylinder(group, material, position, scale, rotateX, rotateY, rotateZ
   return mesh;
 }
 
-function addTail(group, material, position, rotateZ, length) {
-  const tail = addCylinder(group, material, position, [0.025, 0.025, length], Math.PI / 2, 0, rotateZ);
-  addSphere(group, material, [position[0] + 0.08, position[1] - 0.08, position[2] - 0.2], [0.045, 0.045, 0.045]);
-  return tail;
+function addBox(group, material, position, scale) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+  mesh.position.set(...position);
+  mesh.scale.set(...scale);
+  group.add(mesh);
+  return mesh;
 }
 
 function createCollectibleTexture(item) {
@@ -980,77 +1221,11 @@ function createCollectibleTexture(item) {
 
   context.fillStyle = item.accent;
   context.font = '700 24px Arial';
-  context.fillText('3 questions to log sighting', canvas.width / 2, 204);
+  context.fillText('3 questions to complete orb', canvas.width / 2, 204);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
-}
-
-function drawAnimalIcon(context, item, x, y) {
-  context.save();
-
-  if (item.id === 'panda') {
-    context.fillStyle = '#0a1020';
-    context.beginPath();
-    context.arc(x - 58, y - 56, 34, 0, Math.PI * 2);
-    context.arc(x + 58, y - 56, 34, 0, Math.PI * 2);
-    context.fill();
-
-    context.fillStyle = '#f8fbff';
-    context.beginPath();
-    context.arc(x, y, 84, 0, Math.PI * 2);
-    context.fill();
-
-    context.fillStyle = '#0a1020';
-    context.beginPath();
-    context.ellipse(x - 30, y - 14, 18, 28, -0.45, 0, Math.PI * 2);
-    context.ellipse(x + 30, y - 14, 18, 28, 0.45, 0, Math.PI * 2);
-    context.fill();
-    context.beginPath();
-    context.arc(x, y + 24, 13, 0, Math.PI * 2);
-    context.fill();
-  } else if (item.id === 'lion') {
-    context.fillStyle = '#8a431f';
-    for (let index = 0; index < 14; index += 1) {
-      const angle = (index / 14) * Math.PI * 2;
-      context.beginPath();
-      context.arc(x + Math.cos(angle) * 68, y + Math.sin(angle) * 68, 32, 0, Math.PI * 2);
-      context.fill();
-    }
-
-    context.fillStyle = '#ffb35c';
-    context.beginPath();
-    context.arc(x, y, 78, 0, Math.PI * 2);
-    context.fill();
-
-    context.fillStyle = '#08111f';
-    context.beginPath();
-    context.arc(x - 26, y - 16, 8, 0, Math.PI * 2);
-    context.arc(x + 26, y - 16, 8, 0, Math.PI * 2);
-    context.arc(x, y + 20, 12, 0, Math.PI * 2);
-    context.fill();
-  } else {
-    context.fillStyle = '#7c8da8';
-    context.beginPath();
-    context.ellipse(x - 66, y, 44, 64, -0.18, 0, Math.PI * 2);
-    context.ellipse(x + 66, y, 44, 64, 0.18, 0, Math.PI * 2);
-    context.fill();
-
-    context.fillStyle = '#9fb7ff';
-    context.beginPath();
-    context.arc(x, y - 10, 72, 0, Math.PI * 2);
-    context.fill();
-    context.fillRect(x - 18, y + 26, 36, 72);
-
-    context.fillStyle = '#08111f';
-    context.beginPath();
-    context.arc(x - 24, y - 22, 7, 0, Math.PI * 2);
-    context.arc(x + 24, y - 22, 7, 0, Math.PI * 2);
-    context.fill();
-  }
-
-  context.restore();
 }
 
 function updateCollectibles(timeSeconds) {
@@ -1081,14 +1256,14 @@ function updateCollectibles(timeSeconds) {
 
     const bob = Math.sin(timeSeconds * 1.5 + collectible.bobOffset) * 0.08;
     collectible.floatRig.position.y = collectible.worldBaseY + bob;
-    collectible.animalModel.rotation.y += 0.012;
+    collectible.orbModel.rotation.y += 0.012;
     collectible.halo.rotation.z += 0.01;
     collectible.card.lookAt(cameraWorldPosition);
     collectible.hitArea.lookAt(cameraWorldPosition);
 
     const isHighlighted = collectible === highlightedCollectible;
     collectible.floatRig.scale.setScalar(isHighlighted ? 1.08 : 1);
-    collectible.animalModel.traverse((child) => {
+    collectible.orbModel.traverse((child) => {
       if (child.material?.emissiveIntensity !== undefined) {
         child.material.emissiveIntensity = isHighlighted ? 0.12 : 0.02;
       }
@@ -1137,7 +1312,7 @@ function renderQuizQuestion() {
 
   quizTitle.textContent = `You found ${collectible.item.title}`;
   quizStep.textContent = `Question ${collectible.questionIndex + 1} of ${collectible.item.questions.length}`;
-  quizIntro.textContent = 'Keep your streak going. Get all 3 right to add this animal to your collection.';
+  quizIntro.textContent = 'Keep your streak going. Get all 3 right to complete this orb.';
   quizPrompt.textContent = question.prompt;
   quizOptions.replaceChildren();
 
@@ -1192,13 +1367,49 @@ function collectCollectible(collectible) {
   void recordCollectionEvent(collectible);
 
   if (getCollectedCount() === TOTAL_COLLECTIBLES) {
-    gameHint.textContent = 'All 3 hidden animals collected. Restart AR to play again.';
-    statusText.textContent = 'All hidden animals collected. Nice work.';
+    gameHint.textContent = 'Wave complete. Generating the next topic orb wave...';
+    statusText.textContent = 'Wave complete. Generating more orbs.';
+    void startNextOrbWave();
     return;
   }
 
-  gameHint.textContent = `${collectible.item.title} is yours. Keep walking; the remaining animals stay hidden until you get close.`;
+  gameHint.textContent = `${collectible.item.title} is yours. Keep walking; the remaining orbs stay hidden until you get close.`;
   statusText.textContent = `${collectible.item.title} collected. Use Radar and keep walking to reveal the others.`;
+}
+
+async function startNextOrbWave() {
+  orbWaveIndex += 1;
+
+  try {
+    const payload = await postApi('/api/generate-topic', {
+      topic: currentTopicPrompt,
+      count: 6,
+      difficulty: playerProfile.difficulty,
+      accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
+    });
+    applyGeneratedTopic(withWaveOrbIds(payload, orbWaveIndex), false);
+  } catch (error) {
+    console.warn('Could not generate next wave:', error.message);
+    TRIVIA_COLLECTIBLES = TRIVIA_COLLECTIBLES.map((item, index) => ({
+      ...item,
+      id: `${item.id}-wave-${orbWaveIndex}-${index}`,
+    }));
+  }
+
+  resetCollectibles();
+  spawnCollectiblesNearPlayer(lastFloorY);
+}
+
+function withWaveOrbIds(payload, waveIndex) {
+  return {
+    ...payload,
+    orbs: Array.isArray(payload?.orbs)
+      ? payload.orbs.map((orb, index) => ({
+          ...orb,
+          id: `${orb.id || 'orb'}-wave-${waveIndex}-${index}`,
+        }))
+      : [],
+  };
 }
 
 function closeQuizPanel() {
@@ -1207,7 +1418,7 @@ function closeQuizPanel() {
   quizFeedback.textContent = '';
 
   if (collectiblesSpawned && getCollectedCount() < TOTAL_COLLECTIBLES) {
-    gameHint.textContent = `Use Radar distance. Animals reveal inside ${formatDistance(REVEAL_DISTANCE_METERS)}; get within ${formatDistance(INTERACTION_DISTANCE_METERS)}, center, and tap.`;
+    gameHint.textContent = `Use Radar distance. Orbs reveal inside ${formatDistance(REVEAL_DISTANCE_METERS)}; get within ${formatDistance(INTERACTION_DISTANCE_METERS)}, center, and tap.`;
   }
 }
 
@@ -1217,16 +1428,16 @@ function updateCollectionHud() {
   renderCollectibleList();
 
   if (!collectiblesSpawned) {
-    gameHint.textContent = 'Find the floor first. The 3 hidden animals will be placed across a walking route.';
+    gameHint.textContent = `Find the floor first. ${TOTAL_COLLECTIBLES} hidden topic orbs will be placed across a walking route.`;
     return;
   }
 
   if (collectedCount === TOTAL_COLLECTIBLES) {
-    gameHint.textContent = 'All hidden animals collected. Restart AR to play again.';
+    gameHint.textContent = 'All topic orbs completed. Generating more...';
     return;
   }
 
-  gameHint.textContent = `Use Radar distance. Animals reveal inside ${formatDistance(REVEAL_DISTANCE_METERS)}; get within ${formatDistance(INTERACTION_DISTANCE_METERS)}, center, and tap.`;
+  gameHint.textContent = `Use Radar distance. Orbs reveal inside ${formatDistance(REVEAL_DISTANCE_METERS)}; get within ${formatDistance(INTERACTION_DISTANCE_METERS)}, center, and tap.`;
 }
 
 function setupGamePanelGestures() {
@@ -1355,8 +1566,8 @@ function updateJournalPanel() {
   const collectedCount = getCollectedCount();
   const lifetimeCollectedCount = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).filter((item) => getProgressForItem(item).collected).length;
   journalSummary.textContent = lifetimeCollectedCount
-    ? `Achievement chart ${Math.round((lifetimeCollectedCount / TOTAL_COLLECTIBLES) * 100)}% complete. ${lifetimeCollectedCount} of ${TOTAL_COLLECTIBLES} animals logged.`
-    : 'Tap an achievement square to inspect it. Finished animals unlock what you learned.';
+    ? `Achievement chart ${Math.round((lifetimeCollectedCount / TOTAL_COLLECTIBLES) * 100)}% complete. ${lifetimeCollectedCount} of ${TOTAL_COLLECTIBLES} orbs logged.`
+    : 'Tap an achievement square to inspect it. Finished orbs unlock what you learned.';
 
   journalList.replaceChildren();
   journalList.classList.add('achievement-grid');
@@ -1438,7 +1649,7 @@ function renderJournalDetail() {
     ? item.journalNote
     : progress.revealed
       ? `Found, but not finished. Complete ${item.questions.length - answeredCount} more quiz question${item.questions.length - answeredCount === 1 ? '' : 's'} to unlock the full learning log.`
-      : 'Not found yet. Use Radar, walk close, and reveal this animal in AR.';
+      : 'Not found yet. Use Radar, walk close, and reveal this orb in AR.';
 
   journalDetail.append(title, meta, note);
 
@@ -1700,17 +1911,6 @@ function createCollectibleShadow() {
   const shadow = new THREE.Mesh(geometry, material);
   shadow.position.y = 0.01;
   return shadow;
-}
-
-async function checkModelViewerAsset() {
-  try {
-    const response = await fetch('/models/animal.glb', { method: 'HEAD' });
-    if (!response.ok) {
-      modelWarning.classList.remove('hidden');
-    }
-  } catch {
-    modelWarning.classList.remove('hidden');
-  }
 }
 
 function showUnsupported(message) {

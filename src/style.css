@@ -362,6 +362,60 @@ code {
   margin-bottom: 0;
 }
 
+.topic-chat {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.topic-messages {
+  max-height: 8.5rem;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  background: rgba(0, 0, 0, 0.24);
+  padding: 0.8rem;
+}
+
+.topic-messages p {
+  margin: 0 0 0.65rem;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.topic-messages p:last-child {
+  margin-bottom: 0;
+}
+
+.topic-input-label {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#topic-input {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 1rem;
+  outline: none;
+  background: rgba(0, 0, 0, 0.28);
+  color: #ffffff;
+  padding: 0.85rem;
+}
+
+#topic-input:focus {
+  border-color: rgba(138, 215, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(138, 215, 255, 0.12);
+}
+
+#topic-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
 .control-panel__row,
 .hud-panel__header {
   display: flex;
