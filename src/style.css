@@ -1105,6 +1105,10 @@ body.is-ar-active .landing-actions {
   padding: 0;
 }
 
+body.is-ar-active #topic-form {
+  display: none;
+}
+
 body.is-ar-active .control-panel h1 {
   font-size: 1.1rem;
   letter-spacing: -0.03em;
