@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#030814" />
+    <title>Quest AR</title>
+  </head>
+  <body>
+    <main id="app">
+      <section class="panel control-panel landing-panel" aria-label="Quest AR controls">
+        <div class="landing-shell">
+          <div class="landing-copy">
+            <div class="hero__badge">Quest AR Hunt</div>
+            <h1 class="brand-logo" aria-label="Quest AR">
+              <span class="brand-letter">Q</span><span class="brand-letter">u</span><span class="brand-letter">e</span><span class="brand-letter">s</span><span class="brand-letter">t</span>
+              <span class="brand-space" aria-hidden="true"></span>
+              <span class="brand-letter brand-accent">A</span><span class="brand-letter brand-accent">R</span>
+            </h1>
+            <p class="landing-slogan">Spot the unseen. Track the wild. Claim the sighting.</p>
+            <blockquote class="landing-quote">"The world gets bigger when you know where to look."</blockquote>
+          </div>
+
+          <div class="landing-orbit" aria-hidden="true">
+            <div class="landing-core"></div>
+            <span class="orbit-track orbit-track--one"><span class="planet planet--one"></span></span>
+            <span class="orbit-track orbit-track--two"><span class="planet planet--two"></span></span>
+            <span class="orbit-track orbit-track--three"><span class="planet planet--three"></span></span>
+            <span class="orbit-track orbit-track--four"><span class="planet planet--four"></span></span>
+            <span class="orbit-track orbit-track--five"><span class="planet planet--five"></span></span>
+            <span class="orbit-track orbit-track--six"><span class="planet planet--six"></span></span>
+          </div>
+
+          <div class="landing-actions">
+            <div>
+              <p class="eyebrow">Mission</p>
+              <h2>Collect 3 hidden animals</h2>
+              <p class="landing-brief">Open the lens, follow the radar, and walk until each hidden animal appears in your space.</p>
+            </div>
+
+            <button id="start-ar" class="button button--small" type="button" disabled>
+              Checking AR...
+            </button>
+          </div>
+        </div>
+
+        <p id="status" class="status" role="status" aria-live="polite">
+          Open this page on an Android phone with Chrome for the best WebXR AR support.
+        </p>
+      </section>
+
+      <section id="game-panel" class="panel hud-panel hidden" aria-label="Game progress panel">
+        <div id="game-grip" class="hud-grip" aria-hidden="true"></div>
+        <section id="mode-hunt" class="mode-panel" aria-label="Hunt mode panel">
+          <div class="hud-panel__header">
+            <div>
+              <p class="eyebrow">Mission</p>
+              <h2 id="game-count">0/3 collected</h2>
+            </div>
+
+            <div class="radar-dot" aria-hidden="true"></div>
+          </div>
+
+          <p id="game-hint">Find the floor first. The 3 hidden animals will be placed across a walking route.</p>
+          <ul id="game-list" class="game-list" aria-label="Animal list"></ul>
+        </section>
+
+        <section id="mode-radar" class="mode-panel hidden" aria-label="Radar mode panel">
+          <p class="eyebrow">Radar</p>
+          <h2>Route Map</h2>
+          <p id="radar-summary">Scanning for your next animal.</p>
+          <ul id="radar-list" class="game-list" aria-label="Nearby animal list"></ul>
+        </section>
+
+        <section id="mode-journal" class="mode-panel hidden" aria-label="Journal mode panel">
+          <p class="eyebrow">Journal</p>
+          <h2>Your Collection Log</h2>
+          <p id="journal-summary">Every animal you discover gets logged here.</p>
+          <ul id="journal-list" class="game-list" aria-label="Collection journal list"></ul>
+        </section>
+
+        <section id="mode-you" class="mode-panel hidden" aria-label="Player mode panel">
+          <p class="eyebrow">You</p>
+          <h2>Your Night Run</h2>
+          <p id="profile-summary">A quick look at how your hunt is going.</p>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span>Progress</span>
+              <strong id="profile-progress">0/3</strong>
+            </div>
+            <div class="stat-card">
+              <span>Nearest</span>
+              <strong id="profile-nearest">Waiting</strong>
+            </div>
+            <div class="stat-card">
+              <span>Occlusion</span>
+              <strong id="profile-occlusion">Off</strong>
+            </div>
+            <div class="stat-card">
+              <span>Focus</span>
+              <strong id="profile-focus">Steady</strong>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <nav id="tab-bar" class="tab-bar hidden" aria-label="AR bottom tabs">
+        <button class="tab-button is-active" type="button" data-mode="hunt">Hunt</button>
+        <button class="tab-button" type="button" data-mode="radar">Radar</button>
+        <button class="tab-button" type="button" data-mode="journal">Journal</button>
+        <button class="tab-button" type="button" data-mode="you">You</button>
+      </nav>
+
+      <section id="quiz-panel" class="panel hud-panel quiz-panel hidden" aria-label="Trivia quiz panel">
+        <p class="eyebrow" id="quiz-step">Question 1 of 3</p>
+        <h2 id="quiz-title">Trivia Object</h2>
+        <p id="quiz-intro" class="quiz-intro">A quick challenge stands between you and this animal.</p>
+        <p id="quiz-prompt">Question prompt</p>
+        <div id="quiz-options" class="quiz-options"></div>
+        <p id="quiz-feedback" class="status"></p>
+        <button id="quiz-close" class="button button--secondary button--small" type="button">Close Quiz</button>
+      </section>
+
+      <section id="unsupported" class="panel hidden" aria-label="Unsupported device message">
+        <h2>Full WebXR AR is not available here</h2>
+        <p>
+          This browser cannot start an immersive WebXR AR session with hit-test ground detection.
+          Use Android Chrome on a supported ARCore device for this version.
+        </p>
+      </section>
+    </main>
+
+    <div id="xr-root" aria-hidden="true"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

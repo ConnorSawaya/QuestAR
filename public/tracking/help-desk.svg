@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" role="img" aria-labelledby="title desc">
+  <title id="title">Help Desk Tracking Marker</title>
+  <desc id="desc">High-contrast image used to identify the help desk location.</desc>
+  <rect width="600" height="600" fill="#ffffff" />
+  <rect x="34" y="34" width="532" height="532" rx="34" fill="#ffffff" stroke="#000000" stroke-width="28" />
+  <circle cx="300" cy="220" r="120" fill="#000000" />
+  <circle cx="300" cy="220" r="56" fill="#ffffff" />
+  <rect x="220" y="302" width="160" height="120" fill="#000000" rx="20" />
+  <rect x="265" y="338" width="70" height="84" fill="#ffffff" rx="18" />
+  <rect x="110" y="122" width="74" height="74" fill="#000000" rx="16" />
+  <rect x="416" y="122" width="74" height="74" fill="#000000" rx="16" />
+  <rect x="110" y="404" width="74" height="74" fill="#000000" rx="16" />
+  <rect x="416" y="404" width="74" height="74" fill="#000000" rx="16" />
+  <text x="300" y="542" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700" fill="#000000">HELP DESK</text>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" role="img" aria-labelledby="title desc">
+  <title id="title">Workshop Station Tracking Marker</title>
+  <desc id="desc">High-contrast image used to identify the workshop station location.</desc>
+  <rect width="600" height="600" fill="#ffffff" />
+  <rect x="36" y="36" width="528" height="528" rx="34" fill="#ffffff" stroke="#000000" stroke-width="28" />
+  <rect x="110" y="130" width="380" height="280" fill="#000000" rx="24" />
+  <rect x="150" y="170" width="300" height="80" fill="#ffffff" rx="16" />
+  <rect x="150" y="280" width="120" height="90" fill="#ffffff" rx="16" />
+  <rect x="330" y="280" width="120" height="90" fill="#ffffff" rx="16" />
+  <rect x="210" y="430" width="180" height="36" fill="#000000" rx="12" />
+  <circle cx="120" cy="480" r="38" fill="#000000" />
+  <circle cx="480" cy="480" r="38" fill="#000000" />
+  <text x="300" y="542" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" fill="#000000">WORKSHOP STATION</text>
+</svg>
