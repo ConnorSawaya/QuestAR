@@ -6,7 +6,10 @@ const RETICLE_RADIUS = 0.16;
 const COLLECTIBLE_HEIGHT = 0.56;
 const TOTAL_COLLECTIBLES = 3;
 const REVEAL_DISTANCE_METERS = 2.2;
-const INTERACTION_DISTANCE_METERS = 1.35;
+const INTERACTION_DISTANCE_METERS = 2.2;
+const DB_NAME = 'quest-ar-progress';
+const DB_VERSION = 1;
+const PROGRESS_STORE = 'animalProgress';
 
 const TRIVIA_COLLECTIBLES = [
   {
@@ -101,6 +104,7 @@ const radarSummary = document.querySelector('#radar-summary');
 const radarList = document.querySelector('#radar-list');
 const journalSummary = document.querySelector('#journal-summary');
 const journalList = document.querySelector('#journal-list');
+const journalDetail = document.querySelector('#journal-detail');
 const profileSummary = document.querySelector('#profile-summary');
 const profileProgress = document.querySelector('#profile-progress');
 const profileNearest = document.querySelector('#profile-nearest');
@@ -136,6 +140,8 @@ let hasDepthOcclusion = false;
 let activeMode = 'hunt';
 let lastHudRefreshMs = 0;
 let startInteractionInFlight = false;
+let savedAnimalProgress = {};
+let selectedJournalAnimalId = TRIVIA_COLLECTIBLES[0].id;
 
 const selectionRaycaster = new THREE.Raycaster();
 const selectionOrigin = new THREE.Vector3();
@@ -144,6 +150,10 @@ const cameraWorldPosition = new THREE.Vector3();
 const upAxis = new THREE.Vector3(0, 1, 0);
 
 initScene();
+void loadProgressState().then(() => {
+  updateCollectionHud();
+  updateModePanels();
+});
 checkWebXRSupport();
 updateCollectionHud();
 setupGamePanelGestures();
@@ -155,6 +165,76 @@ startButton.addEventListener('pointerup', handleStartButtonInteraction);
 startButton.addEventListener('touchend', handleStartButtonInteraction, { passive: false });
 startButton.addEventListener('click', handleStartButtonInteraction);
 quizClose.addEventListener('click', closeQuizPanel);
+
+function openProgressDb() {
+  return new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) {
+      reject(new Error('IndexedDB is not available.'));
+      return;
+    }
+
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(PROGRESS_STORE, { keyPath: 'id' });
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open progress database.'));
+  });
+}
+
+async function loadProgressState() {
+  try {
+    const db = await openProgressDb();
+    const transaction = db.transaction(PROGRESS_STORE, 'readonly');
+    const store = transaction.objectStore(PROGRESS_STORE);
+    const records = await requestToPromise(store.getAll());
+    savedAnimalProgress = Object.fromEntries(records.map((record) => [record.id, record]));
+    db.close();
+  } catch (error) {
+    console.warn('Progress database unavailable:', error.message);
+  }
+}
+
+async function saveAnimalProgress(collectible) {
+  const record = {
+    id: collectible.item.id,
+    title: collectible.item.title,
+    collected: collectible.collected,
+    collectedAt: collectible.collected ? new Date().toISOString() : (savedAnimalProgress[collectible.item.id]?.collectedAt || null),
+    questionIndex: collectible.questionIndex,
+    revealed: collectible.revealed,
+    updatedAt: new Date().toISOString(),
+  };
+
+  savedAnimalProgress[collectible.item.id] = record;
+
+  try {
+    const db = await openProgressDb();
+    const transaction = db.transaction(PROGRESS_STORE, 'readwrite');
+    transaction.objectStore(PROGRESS_STORE).put(record);
+    await transactionToPromise(transaction);
+    db.close();
+  } catch (error) {
+    console.warn('Could not save progress:', error.message);
+  }
+}
+
+function requestToPromise(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function transactionToPromise(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
 
 function handleStartButtonInteraction(event) {
   if (event.type === 'touchend') {
@@ -440,6 +520,7 @@ function spawnCollectiblesFromReticle() {
 }
 
 function createCollectible(item, groundPosition) {
+  const progress = savedAnimalProgress[item.id] || {};
   const group = new THREE.Group();
   group.position.copy(groundPosition);
   group.visible = false;
@@ -508,7 +589,7 @@ function createCollectible(item, groundPosition) {
 
   return {
     card,
-    collected: false,
+    collected: Boolean(progress.collected),
     beacon,
     floatRig,
     group,
@@ -517,8 +598,8 @@ function createCollectible(item, groundPosition) {
     hitArea,
     item,
     orb,
-    questionIndex: 0,
-    revealed: false,
+    questionIndex: Math.min(progress.questionIndex || 0, item.questions.length),
+    revealed: Boolean(progress.revealed || progress.collected),
     worldBaseY: COLLECTIBLE_HEIGHT,
     bobOffset: Math.random() * Math.PI * 2,
   };
@@ -639,8 +720,9 @@ function updateCollectibles(timeSeconds) {
     }
 
     const distance = getCollectibleDistance(collectible);
-    if (distance <= REVEAL_DISTANCE_METERS) {
+    if (!collectible.revealed && distance <= REVEAL_DISTANCE_METERS) {
       collectible.revealed = true;
+      void saveAnimalProgress(collectible);
     }
 
     collectible.group.visible = collectible.revealed;
@@ -732,6 +814,7 @@ function handleQuizAnswer(answerIndex) {
   }
 
   collectible.questionIndex += 1;
+  void saveAnimalProgress(collectible);
 
   if (collectible.questionIndex >= collectible.item.questions.length) {
     collectCollectible(collectible);
@@ -750,6 +833,7 @@ function collectCollectible(collectible) {
   quizFeedback.textContent = '';
   updateCollectionHud();
   updateModePanels();
+  void saveAnimalProgress(collectible);
 
   if (getCollectedCount() === TOTAL_COLLECTIBLES) {
     gameHint.textContent = 'All 3 hidden animals collected. Restart AR to play again.';
@@ -904,64 +988,112 @@ function updateRadarPanel() {
 
 function updateJournalPanel() {
   const collectedCount = getCollectedCount();
-  const completionPercent = Math.round((collectedCount / TOTAL_COLLECTIBLES) * 100);
-  journalSummary.textContent = collectedCount
-    ? `Collection book ${completionPercent}% complete. ${collectedCount} of ${TOTAL_COLLECTIBLES} achievements logged.`
-    : 'Collect an animal to unlock its achievement card and route note.';
+  const lifetimeCollectedCount = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).filter((item) => getProgressForItem(item).collected).length;
+  journalSummary.textContent = lifetimeCollectedCount
+    ? `Achievement chart ${Math.round((lifetimeCollectedCount / TOTAL_COLLECTIBLES) * 100)}% complete. ${lifetimeCollectedCount} of ${TOTAL_COLLECTIBLES} animals logged.`
+    : 'Tap an achievement square to inspect it. Finished animals unlock what you learned.';
 
   journalList.replaceChildren();
+  journalList.classList.add('achievement-grid');
 
   TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).forEach((item, index) => {
-    const collectible = collectibles.find((entry) => entry.item.id === item.id);
-    const collected = collectible?.collected ?? false;
-    const answeredCount = collected ? item.questions.length : (collectible?.questionIndex ?? 0);
+    const progress = getProgressForItem(item);
+    const collected = Boolean(progress.collected);
+    const answeredCount = collected ? item.questions.length : (progress.questionIndex || 0);
     const progressPercent = Math.round((answeredCount / item.questions.length) * 100);
     const listItem = document.createElement('li');
-    listItem.className = `collection-card ${collected ? 'is-collected' : 'is-locked'}`;
+    listItem.className = `achievement-card ${collected ? 'is-collected' : 'is-locked'} ${selectedJournalAnimalId === item.id ? 'is-selected' : ''}`;
     listItem.style.setProperty('--accent', item.accent);
+    listItem.tabIndex = 0;
+    listItem.setAttribute('role', 'button');
+    listItem.setAttribute('aria-label', `${item.title} achievement ${collected ? 'complete' : 'locked'}`);
 
     const badge = document.createElement('div');
-    badge.className = 'collection-card__badge';
+    badge.className = 'achievement-card__badge';
     badge.textContent = String(index + 1).padStart(3, '0');
-
-    const content = document.createElement('div');
-    content.className = 'collection-card__content';
-
-    const header = document.createElement('div');
-    header.className = 'collection-card__header';
 
     const title = document.createElement('strong');
     title.textContent = item.title;
 
     const state = document.createElement('span');
-    state.className = 'collection-card__state';
+    state.className = 'achievement-card__state';
     if (collected) {
-      state.textContent = 'Collected';
-    } else if (collectible && answeredCount > 0) {
+      state.textContent = 'Done';
+    } else if (answeredCount > 0) {
       state.textContent = `${answeredCount}/${item.questions.length} quiz`;
+    } else if (progress.revealed) {
+      state.textContent = 'Found';
     } else {
-      state.textContent = collectiblesSpawned ? 'Locked' : 'Unknown';
+      state.textContent = 'Locked';
     }
 
-    const meta = document.createElement('p');
-    meta.textContent = `${item.rarity} - ${item.trait}`;
-
-    const note = document.createElement('span');
-    note.className = 'collection-card__note';
-    note.textContent = collected ? item.journalNote : 'Find and clear this animal quiz to reveal the full route note.';
-
-    const progress = document.createElement('div');
-    progress.className = 'collection-card__progress';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'achievement-card__progress';
 
     const progressFill = document.createElement('div');
     progressFill.style.width = `${progressPercent}%`;
 
-    progress.appendChild(progressFill);
-    header.append(title, state);
-    content.append(header, meta, note, progress);
-    listItem.append(badge, content);
+    progressBar.appendChild(progressFill);
+    listItem.append(badge, title, state, progressBar);
+    listItem.addEventListener('click', () => selectJournalAnimal(item.id));
+    listItem.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectJournalAnimal(item.id);
+      }
+    });
     journalList.appendChild(listItem);
   });
+
+  renderJournalDetail();
+}
+
+function selectJournalAnimal(itemId) {
+  selectedJournalAnimalId = itemId;
+  updateJournalPanel();
+}
+
+function renderJournalDetail() {
+  const item = TRIVIA_COLLECTIBLES.find((entry) => entry.id === selectedJournalAnimalId) || TRIVIA_COLLECTIBLES[0];
+  const progress = getProgressForItem(item);
+  const collected = Boolean(progress.collected);
+  const answeredCount = collected ? item.questions.length : (progress.questionIndex || 0);
+  journalDetail.replaceChildren();
+  journalDetail.style.setProperty('--accent', item.accent);
+
+  const title = document.createElement('h3');
+  title.textContent = item.title;
+
+  const meta = document.createElement('p');
+  meta.className = 'journal-detail__meta';
+  meta.textContent = `${item.rarity} - ${item.trait}`;
+
+  const note = document.createElement('p');
+  note.textContent = collected
+    ? item.journalNote
+    : progress.revealed
+      ? `Found, but not finished. Complete ${item.questions.length - answeredCount} more quiz question${item.questions.length - answeredCount === 1 ? '' : 's'} to unlock the full learning log.`
+      : 'Not found yet. Use Radar, walk close, and reveal this animal in AR.';
+
+  journalDetail.append(title, meta, note);
+
+  if (!collected) {
+    return;
+  }
+
+  const learnedTitle = document.createElement('strong');
+  learnedTitle.textContent = 'What you learned';
+
+  const learnedList = document.createElement('ul');
+  learnedList.className = 'learned-list';
+
+  item.questions.forEach((question) => {
+    const entry = document.createElement('li');
+    entry.textContent = question.options[question.answer];
+    learnedList.appendChild(entry);
+  });
+
+  journalDetail.append(learnedTitle, learnedList);
 }
 
 function updateProfilePanel() {
@@ -978,7 +1110,29 @@ function updateProfilePanel() {
 }
 
 function getCollectedCount() {
+  if (!collectibles.length) {
+    return TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).filter((item) => getProgressForItem(item).collected).length;
+  }
+
   return collectibles.filter((collectible) => collectible.collected).length;
+}
+
+function getProgressForItem(item) {
+  const collectible = collectibles.find((entry) => entry.item.id === item.id);
+
+  if (collectible) {
+    return {
+      collected: collectible.collected,
+      questionIndex: collectible.questionIndex,
+      revealed: collectible.revealed,
+    };
+  }
+
+  return savedAnimalProgress[item.id] || {
+    collected: false,
+    questionIndex: 0,
+    revealed: false,
+  };
 }
 
 function formatDistance(distanceMeters) {
