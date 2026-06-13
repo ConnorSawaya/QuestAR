@@ -112,6 +112,9 @@ const profileOcclusion = document.querySelector('#profile-occlusion');
 const profileFocus = document.querySelector('#profile-focus');
 const tabBar = document.querySelector('#tab-bar');
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
+const closestArrow = document.querySelector('#closest-arrow');
+const closestArrowIcon = document.querySelector('#closest-arrow-icon');
+const closestArrowLabel = document.querySelector('#closest-arrow-label');
 const quizPanel = document.querySelector('#quiz-panel');
 const quizTitle = document.querySelector('#quiz-title');
 const quizStep = document.querySelector('#quiz-step');
@@ -553,15 +556,8 @@ function createCollectible(item, groundPosition) {
   beacon.position.y = 0.86;
   group.add(beacon);
 
-  const orbMaterial = new THREE.MeshStandardMaterial({
-    color: item.accent,
-    emissive: item.accent,
-    emissiveIntensity: 0.55,
-    roughness: 0.18,
-    metalness: 0.18,
-  });
-  const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.19, 0), orbMaterial);
-  floatRig.add(orb);
+  const animalModel = createAnimalModel(item);
+  floatRig.add(animalModel);
 
   const haloMaterial = new THREE.MeshBasicMaterial({
     color: item.accent,
@@ -576,15 +572,15 @@ function createCollectible(item, groundPosition) {
 
   const cardTexture = createCollectibleTexture(item);
   const cardMaterial = new THREE.MeshBasicMaterial({ map: cardTexture, transparent: true, side: THREE.DoubleSide });
-  const card = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.82), cardMaterial);
-  card.position.y = 0.3;
+  const card = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.28), cardMaterial);
+  card.position.y = 0.72;
   floatRig.add(card);
 
   const hitArea = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.8, 1.04),
+    new THREE.PlaneGeometry(1.25, 1.35),
     new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide }),
   );
-  hitArea.position.copy(card.position);
+  hitArea.position.y = 0.32;
   floatRig.add(hitArea);
 
   return {
@@ -597,7 +593,7 @@ function createCollectible(item, groundPosition) {
     halo,
     hitArea,
     item,
-    orb,
+    animalModel,
     questionIndex: Math.min(progress.questionIndex || 0, item.questions.length),
     revealed: Boolean(progress.revealed || progress.collected),
     worldBaseY: COLLECTIBLE_HEIGHT,
@@ -605,34 +601,129 @@ function createCollectible(item, groundPosition) {
   };
 }
 
+function createAnimalModel(item) {
+  if (item.id === 'panda') {
+    return createPandaModel();
+  }
+
+  if (item.id === 'lion') {
+    return createLionModel();
+  }
+
+  return createElephantModel();
+}
+
+function createPandaModel() {
+  const group = new THREE.Group();
+  const white = new THREE.MeshStandardMaterial({ color: 0xf6f8ff, roughness: 0.62 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x080b10, roughness: 0.68 });
+
+  addSphere(group, white, [0, 0.12, 0], [0.36, 0.3, 0.28]);
+  addSphere(group, white, [0, 0.47, 0.03], [0.25, 0.24, 0.23]);
+  addSphere(group, black, [-0.17, 0.66, 0.02], [0.1, 0.1, 0.08]);
+  addSphere(group, black, [0.17, 0.66, 0.02], [0.1, 0.1, 0.08]);
+  addSphere(group, black, [-0.09, 0.5, 0.23], [0.045, 0.065, 0.025]);
+  addSphere(group, black, [0.09, 0.5, 0.23], [0.045, 0.065, 0.025]);
+  addSphere(group, black, [0, 0.41, 0.25], [0.035, 0.025, 0.02]);
+  addSphere(group, black, [-0.22, 0.13, 0.09], [0.09, 0.2, 0.09]);
+  addSphere(group, black, [0.22, 0.13, 0.09], [0.09, 0.2, 0.09]);
+  addSphere(group, black, [-0.15, -0.12, 0.08], [0.11, 0.08, 0.12]);
+  addSphere(group, black, [0.15, -0.12, 0.08], [0.11, 0.08, 0.12]);
+  return group;
+}
+
+function createLionModel() {
+  const group = new THREE.Group();
+  const fur = new THREE.MeshStandardMaterial({ color: 0xffb35c, roughness: 0.58 });
+  const mane = new THREE.MeshStandardMaterial({ color: 0x8a431f, roughness: 0.72 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1b0e08, roughness: 0.65 });
+
+  addSphere(group, fur, [0, 0.12, 0], [0.38, 0.24, 0.22]);
+  addSphere(group, mane, [0, 0.44, 0.04], [0.29, 0.28, 0.24]);
+  addSphere(group, fur, [0, 0.43, 0.15], [0.19, 0.17, 0.14]);
+  addSphere(group, fur, [-0.17, 0.58, 0.06], [0.08, 0.08, 0.05]);
+  addSphere(group, fur, [0.17, 0.58, 0.06], [0.08, 0.08, 0.05]);
+  addSphere(group, dark, [-0.07, 0.46, 0.28], [0.018, 0.018, 0.012]);
+  addSphere(group, dark, [0.07, 0.46, 0.28], [0.018, 0.018, 0.012]);
+  addSphere(group, dark, [0, 0.39, 0.29], [0.035, 0.025, 0.018]);
+  addSphere(group, fur, [-0.24, -0.08, 0.1], [0.07, 0.17, 0.07]);
+  addSphere(group, fur, [0.24, -0.08, 0.1], [0.07, 0.17, 0.07]);
+  addSphere(group, fur, [-0.13, -0.11, -0.08], [0.07, 0.16, 0.07]);
+  addSphere(group, fur, [0.13, -0.11, -0.08], [0.07, 0.16, 0.07]);
+  addTail(group, fur, [0, 0.15, -0.24], -0.2, 0.28);
+  return group;
+}
+
+function createElephantModel() {
+  const group = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({ color: 0x9fb7ff, roughness: 0.7 });
+  const ear = new THREE.MeshStandardMaterial({ color: 0x7f94d6, roughness: 0.72 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x071020, roughness: 0.62 });
+
+  addSphere(group, skin, [0, 0.16, 0], [0.42, 0.28, 0.24]);
+  addSphere(group, skin, [0, 0.48, 0.08], [0.25, 0.22, 0.2]);
+  addSphere(group, ear, [-0.25, 0.48, 0.03], [0.13, 0.19, 0.045]);
+  addSphere(group, ear, [0.25, 0.48, 0.03], [0.13, 0.19, 0.045]);
+  addCylinder(group, skin, [0, 0.26, 0.28], [0.055, 0.075, 0.35], Math.PI / 2, 0, 0);
+  addSphere(group, dark, [-0.07, 0.51, 0.28], [0.018, 0.018, 0.012]);
+  addSphere(group, dark, [0.07, 0.51, 0.28], [0.018, 0.018, 0.012]);
+  addCylinder(group, skin, [-0.24, -0.11, 0.08], [0.07, 0.07, 0.24], 0, 0, 0);
+  addCylinder(group, skin, [0.24, -0.11, 0.08], [0.07, 0.07, 0.24], 0, 0, 0);
+  addCylinder(group, skin, [-0.16, -0.11, -0.13], [0.07, 0.07, 0.24], 0, 0, 0);
+  addCylinder(group, skin, [0.16, -0.11, -0.13], [0.07, 0.07, 0.24], 0, 0, 0);
+  return group;
+}
+
+function addSphere(group, material, position, scale) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), material);
+  mesh.position.set(...position);
+  mesh.scale.set(...scale);
+  group.add(mesh);
+  return mesh;
+}
+
+function addCylinder(group, material, position, scale, rotateX, rotateY, rotateZ) {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 18), material);
+  mesh.position.set(...position);
+  mesh.scale.set(...scale);
+  mesh.rotation.set(rotateX, rotateY, rotateZ);
+  group.add(mesh);
+  return mesh;
+}
+
+function addTail(group, material, position, rotateZ, length) {
+  const tail = addCylinder(group, material, position, [0.025, 0.025, length], Math.PI / 2, 0, rotateZ);
+  addSphere(group, material, [position[0] + 0.08, position[1] - 0.08, position[2] - 0.2], [0.045, 0.045, 0.045]);
+  return tail;
+}
+
 function createCollectibleTexture(item) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
-  canvas.height = 768;
+  canvas.height = 256;
   const context = canvas.getContext('2d');
 
   context.fillStyle = '#08111f';
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   context.strokeStyle = item.accent;
-  context.lineWidth = 18;
-  context.strokeRect(28, 28, canvas.width - 56, canvas.height - 56);
+  context.lineWidth = 12;
+  context.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
 
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  drawAnimalIcon(context, item, canvas.width / 2, 190);
 
   context.fillStyle = '#ffffff';
-  context.font = '700 46px Arial';
-  context.fillText(item.title, canvas.width / 2, 370);
+  context.font = '800 58px Arial';
+  context.fillText(item.title, canvas.width / 2, 92);
 
   context.fillStyle = 'rgba(255,255,255,0.84)';
-  context.font = '500 34px Arial';
-  context.fillText('Walk Close + Tap', canvas.width / 2, 454);
+  context.font = '600 30px Arial';
+  context.fillText('Walk Close + Tap', canvas.width / 2, 154);
 
   context.fillStyle = item.accent;
-  context.font = '600 30px Arial';
-  context.fillText('3 questions to log sighting', canvas.width / 2, 560);
+  context.font = '700 24px Arial';
+  context.fillText('3 questions to log sighting', canvas.width / 2, 204);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -733,14 +824,18 @@ function updateCollectibles(timeSeconds) {
 
     const bob = Math.sin(timeSeconds * 1.5 + collectible.bobOffset) * 0.08;
     collectible.floatRig.position.y = collectible.worldBaseY + bob;
-    collectible.orb.rotation.y += 0.02;
+    collectible.animalModel.rotation.y += 0.012;
     collectible.halo.rotation.z += 0.01;
     collectible.card.lookAt(cameraWorldPosition);
     collectible.hitArea.lookAt(cameraWorldPosition);
 
     const isHighlighted = collectible === highlightedCollectible;
     collectible.floatRig.scale.setScalar(isHighlighted ? 1.08 : 1);
-    collectible.orb.material.emissiveIntensity = isHighlighted ? 0.9 : 0.55;
+    collectible.animalModel.traverse((child) => {
+      if (child.material?.emissiveIntensity !== undefined) {
+        child.material.emissiveIntensity = isHighlighted ? 0.12 : 0.02;
+      }
+    });
     collectible.halo.material.opacity = isHighlighted ? 0.95 : 0.7;
     collectible.beacon.material.opacity = isHighlighted ? 0.26 : 0.16;
     collectible.groundRing.material.opacity = isHighlighted ? 1 : 0.78;
@@ -931,6 +1026,26 @@ function updateModePanels() {
   updateRadarPanel();
   updateJournalPanel();
   updateProfilePanel();
+  updateClosestArrow();
+}
+
+function updateClosestArrow() {
+  if (!collectiblesSpawned || activeQuiz) {
+    closestArrow.classList.add('hidden');
+    return;
+  }
+
+  const nearest = getNearestCollectible();
+
+  if (!nearest) {
+    closestArrow.classList.add('hidden');
+    return;
+  }
+
+  const direction = getCollectibleDirection(nearest);
+  closestArrowIcon.textContent = getDirectionArrow(direction);
+  closestArrowLabel.textContent = `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}`;
+  closestArrow.classList.remove('hidden');
 }
 
 function updateRadarPanel() {
