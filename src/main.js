@@ -5,8 +5,8 @@ import * as THREE from 'three';
 const RETICLE_RADIUS = 0.16;
 const COLLECTIBLE_HEIGHT = 0.56;
 const TOTAL_COLLECTIBLES = 3;
-const REVEAL_DISTANCE_METERS = 2.2;
-const INTERACTION_DISTANCE_METERS = 2.2;
+const REVEAL_DISTANCE_METERS = 4;
+const INTERACTION_DISTANCE_METERS = 3;
 const DB_NAME = 'quest-ar-progress';
 const DB_VERSION = 1;
 const PROGRESS_STORE = 'animalProgress';
@@ -813,6 +813,7 @@ function createCollectible(item, groundPosition) {
   group.add(beacon);
 
   const animalModel = createAnimalModel(item);
+  animalModel.scale.setScalar(0.72);
   floatRig.add(animalModel);
 
   const haloMaterial = new THREE.MeshBasicMaterial({
@@ -1302,8 +1303,9 @@ function updateClosestArrow() {
     return;
   }
 
-  const direction = getCollectibleDirection(nearest);
-  closestArrowIcon.textContent = getDirectionArrow(direction);
+  const angle = getCollectibleScreenAngleDegrees(nearest);
+  closestArrowIcon.textContent = '↑';
+  closestArrowIcon.style.transform = `rotate(${angle}deg)`;
   closestArrowLabel.textContent = `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}`;
   closestArrow.classList.remove('hidden');
 }
@@ -1317,48 +1319,36 @@ function updateRadarPanel() {
 
   const nearest = getNearestCollectible();
   radarSummary.textContent = nearest
-    ? `${nearest.item.title} is closest at ${formatDistance(getCollectibleDistance(nearest))}. It appears at ${formatDistance(REVEAL_DISTANCE_METERS)} and opens at ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
+    ? `Follow the arrow to ${nearest.item.title}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
     : 'All signals collected.';
 
   radarList.replaceChildren();
 
-  collectibles.forEach((collectible) => {
-    const item = document.createElement('li');
-    item.className = 'map-signal';
+  if (!nearest) {
+    const cleared = document.createElement('strong');
+    cleared.textContent = 'Route cleared';
+    radarList.appendChild(cleared);
+    return;
+  }
 
-    const directionArrow = document.createElement('span');
-    directionArrow.className = 'direction-arrow';
+  const distance = getCollectibleDistance(nearest);
+  const angle = getCollectibleScreenAngleDegrees(nearest);
+  const arrowWrap = document.createElement('div');
+  arrowWrap.className = 'radar-compass__bubble';
 
-    const label = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = collectible.item.title;
+  const arrow = document.createElement('span');
+  arrow.className = 'radar-compass__arrow';
+  arrow.textContent = '↑';
+  arrow.style.transform = `rotate(${angle}deg)`;
 
-    const meta = document.createElement('span');
-    const distanceChip = document.createElement('span');
-    distanceChip.className = 'distance-chip';
+  const distanceLabel = document.createElement('strong');
+  distanceLabel.textContent = `${formatDistance(distance)} away`;
 
-    if (collectible.collected) {
-      directionArrow.textContent = '✓';
-      meta.textContent = 'Collected';
-      distanceChip.textContent = 'Done';
-    } else {
-      const distance = getCollectibleDistance(collectible);
-      const direction = getCollectibleDirection(collectible);
-      directionArrow.textContent = getDirectionArrow(direction);
-      if (!collectible.revealed && distance > REVEAL_DISTANCE_METERS) {
-        meta.textContent = `${direction} - hidden, walk ${formatDistance(distance - REVEAL_DISTANCE_METERS)} closer to reveal`;
-      } else if (distance > INTERACTION_DISTANCE_METERS) {
-        meta.textContent = `${direction} - found, walk ${formatDistance(distance - INTERACTION_DISTANCE_METERS)} closer to tap`;
-      } else {
-        meta.textContent = `${direction} - found, tap when centered`;
-      }
-      distanceChip.textContent = formatDistance(distance);
-    }
+  const targetLabel = document.createElement('span');
+  targetLabel.textContent = nearest.item.title;
 
-    label.append(title, meta);
-    item.append(directionArrow, label, distanceChip);
-    radarList.appendChild(item);
-  });
+  arrowWrap.appendChild(arrow);
+  radarList.append(arrowWrap, distanceLabel, targetLabel);
 }
 
 function updateJournalPanel() {
@@ -1558,6 +1548,29 @@ function getDirectionArrow(direction) {
   }
 
   return '↑';
+}
+
+function getCollectibleScreenAngleDegrees(collectible) {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  forward.y = 0;
+
+  if (forward.lengthSq() < 0.0001) {
+    return 0;
+  }
+
+  forward.normalize();
+  camera.getWorldPosition(cameraWorldPosition);
+  const toCollectible = collectible.group.position.clone().sub(cameraWorldPosition);
+  toCollectible.y = 0;
+
+  if (toCollectible.lengthSq() < 0.0001) {
+    return 0;
+  }
+
+  toCollectible.normalize();
+  const right = new THREE.Vector3().crossVectors(forward, upAxis).normalize().negate();
+  const angleRadians = Math.atan2(right.dot(toCollectible), forward.dot(toCollectible));
+  return THREE.MathUtils.radToDeg(angleRadians);
 }
 
 function resetCollectibles() {
