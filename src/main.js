@@ -10,6 +10,9 @@ const INTERACTION_DISTANCE_METERS = 2.2;
 const DB_NAME = 'quest-ar-progress';
 const DB_VERSION = 1;
 const PROGRESS_STORE = 'animalProgress';
+const PLAYER_ID_KEY = 'quest-ar-player-id';
+const PLAYER_NAME_KEY = 'quest-ar-player-name';
+const LOCAL_PROFILE_KEY = 'quest-ar-local-profile';
 
 const TRIVIA_COLLECTIBLES = [
   {
@@ -107,14 +110,19 @@ const journalList = document.querySelector('#journal-list');
 const journalDetail = document.querySelector('#journal-detail');
 const profileSummary = document.querySelector('#profile-summary');
 const profileProgress = document.querySelector('#profile-progress');
+const profileLevel = document.querySelector('#profile-level');
+const profileXp = document.querySelector('#profile-xp');
+const profileStreak = document.querySelector('#profile-streak');
 const profileNearest = document.querySelector('#profile-nearest');
-const profileOcclusion = document.querySelector('#profile-occlusion');
-const profileFocus = document.querySelector('#profile-focus');
+const profileRank = document.querySelector('#profile-rank');
+const profileDifficulty = document.querySelector('#profile-difficulty');
+const leaderboardList = document.querySelector('#leaderboard-list');
 const tabBar = document.querySelector('#tab-bar');
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const closestArrow = document.querySelector('#closest-arrow');
 const closestArrowIcon = document.querySelector('#closest-arrow-icon');
 const closestArrowLabel = document.querySelector('#closest-arrow-label');
+const xpToast = document.querySelector('#xp-toast');
 const quizPanel = document.querySelector('#quiz-panel');
 const quizTitle = document.querySelector('#quiz-title');
 const quizStep = document.querySelector('#quiz-step');
@@ -145,6 +153,10 @@ let lastHudRefreshMs = 0;
 let startInteractionInFlight = false;
 let savedAnimalProgress = {};
 let selectedJournalAnimalId = TRIVIA_COLLECTIBLES[0].id;
+let playerId = getOrCreatePlayerId();
+let playerName = getOrCreatePlayerName();
+let playerProfile = getDefaultProfile();
+let leaderboard = [];
 
 const selectionRaycaster = new THREE.Raycaster();
 const selectionOrigin = new THREE.Vector3();
@@ -157,6 +169,7 @@ void loadProgressState().then(() => {
   updateCollectionHud();
   updateModePanels();
 });
+void refreshPlayerProfile();
 checkWebXRSupport();
 updateCollectionHud();
 setupGamePanelGestures();
@@ -237,6 +250,249 @@ function transactionToPromise(transaction) {
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });
+}
+
+function getOrCreatePlayerId() {
+  const existing = localStorage.getItem(PLAYER_ID_KEY);
+
+  if (existing) {
+    return existing;
+  }
+
+  const id = crypto.randomUUID ? crypto.randomUUID() : `player-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  localStorage.setItem(PLAYER_ID_KEY, id);
+  return id;
+}
+
+function getOrCreatePlayerName() {
+  const existing = localStorage.getItem(PLAYER_NAME_KEY);
+
+  if (existing) {
+    return existing;
+  }
+
+  const name = `Explorer ${playerId.slice(-4).toUpperCase()}`;
+  localStorage.setItem(PLAYER_NAME_KEY, name);
+  return name;
+}
+
+function getDefaultProfile() {
+  const saved = localStorage.getItem(LOCAL_PROFILE_KEY);
+
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      localStorage.removeItem(LOCAL_PROFILE_KEY);
+    }
+  }
+
+  return decorateClientProfile({
+    id: playerId,
+    name: playerName,
+    xp: 0,
+    level: 1,
+    streak: 0,
+    bestStreak: 0,
+    answersCorrect: 0,
+    answersTotal: 0,
+    animalCount: 0,
+    difficulty: 'Easy',
+  });
+}
+
+async function refreshPlayerProfile() {
+  try {
+    const payload = await apiFetch(`/api/profile?playerId=${encodeURIComponent(playerId)}&name=${encodeURIComponent(playerName)}`);
+    applyProfilePayload(payload);
+  } catch (error) {
+    console.warn('Profile API unavailable, using local profile:', error.message);
+    updateModePanels();
+  }
+}
+
+async function recordAnswerEvent(correct, collectible, questionIndex) {
+  const payload = await postApi('/api/answer', {
+    playerId,
+    name: playerName,
+    animalId: collectible.item.id,
+    questionIndex,
+    correct,
+  }).catch(() => applyLocalAnswerEvent(correct, questionIndex));
+
+  applyProfilePayload(payload);
+  showXpToast(payload.xpGained || 0, payload.leveledUp, payload.profile?.level);
+  return payload;
+}
+
+async function recordCollectionEvent(collectible) {
+  const payload = await postApi('/api/collect', {
+    playerId,
+    name: playerName,
+    animalId: collectible.item.id,
+  }).catch(() => applyLocalCollectionEvent(collectible.item.id));
+
+  applyProfilePayload(payload);
+  showXpToast(payload.xpGained || 0, payload.leveledUp, payload.profile?.level);
+  return payload;
+}
+
+async function apiFetch(path) {
+  const response = await fetch(path, { headers: { Accept: 'application/json' } });
+
+  if (!response.ok) {
+    throw new Error(`API ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function postApi(path, body) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`API ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function applyProfilePayload(payload) {
+  if (payload?.profile) {
+    playerProfile = decorateClientProfile(payload.profile);
+    localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
+  }
+
+  if (payload?.leaderboard) {
+    leaderboard = payload.leaderboard;
+  }
+
+  updateModePanels();
+}
+
+function applyLocalAnswerEvent(correct, questionIndex) {
+  const previousLevel = playerProfile.level;
+  let xpGained = 0;
+  const nextProfile = { ...playerProfile };
+  nextProfile.answersTotal += 1;
+
+  if (correct) {
+    nextProfile.answersCorrect += 1;
+    nextProfile.streak += 1;
+    nextProfile.bestStreak = Math.max(nextProfile.bestStreak, nextProfile.streak);
+    xpGained = getClientAnswerXp(nextProfile.level, nextProfile.streak, questionIndex);
+    nextProfile.xp += xpGained;
+  } else {
+    nextProfile.streak = 0;
+  }
+
+  playerProfile = decorateClientProfile(nextProfile);
+  leaderboard = [{ rank: 1, ...playerProfile }];
+  localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
+  return { profile: playerProfile, leaderboard, xpGained, leveledUp: playerProfile.level > previousLevel, correct };
+}
+
+function applyLocalCollectionEvent(animalId) {
+  const previousLevel = playerProfile.level;
+  const animalsCollected = { ...(playerProfile.animalsCollected || {}) };
+  const alreadyCollected = Boolean(animalsCollected[animalId]);
+  const xpGained = alreadyCollected ? 0 : 70 + Math.min(playerProfile.level * 5, 60);
+
+  if (!alreadyCollected) {
+    animalsCollected[animalId] = new Date().toISOString();
+  }
+
+  playerProfile = decorateClientProfile({
+    ...playerProfile,
+    xp: playerProfile.xp + xpGained,
+    animalsCollected,
+    animalCount: Object.keys(animalsCollected).length,
+  });
+  leaderboard = [{ rank: 1, ...playerProfile }];
+  localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
+  return { profile: playerProfile, leaderboard, xpGained, leveledUp: playerProfile.level > previousLevel };
+}
+
+function decorateClientProfile(profile) {
+  const level = getClientLevelForXp(profile.xp || 0);
+  const currentLevelXp = getClientXpForLevel(level);
+  const nextLevelXp = getClientXpForLevel(level + 1);
+  const xpIntoLevel = (profile.xp || 0) - currentLevelXp;
+  const xpForNextLevel = nextLevelXp - currentLevelXp;
+
+  return {
+    ...profile,
+    level,
+    xpIntoLevel,
+    xpForNextLevel,
+    nextLevelXp,
+    difficulty: profile.difficulty || getClientDifficultyForLevel(level),
+  };
+}
+
+function getClientAnswerXp(level, streak, questionIndex) {
+  return 22 + Math.min(level * 2, 24) + Math.min(streak * 4, 40) + Math.max(questionIndex, 0) * 3;
+}
+
+function getClientLevelForXp(xp) {
+  let level = 1;
+
+  while (xp >= getClientXpForLevel(level + 1)) {
+    level += 1;
+  }
+
+  return level;
+}
+
+function getClientXpForLevel(level) {
+  if (level <= 1) {
+    return 0;
+  }
+
+  return Math.round(120 * (level - 1) + 70 * (level - 1) ** 2);
+}
+
+function getClientDifficultyForLevel(level) {
+  if (level >= 10) {
+    return 'Expert';
+  }
+
+  if (level >= 6) {
+    return 'Hard';
+  }
+
+  if (level >= 3) {
+    return 'Medium';
+  }
+
+  return 'Easy';
+}
+
+function showXpToast(xpGained, leveledUp, level) {
+  if (!xpGained && !leveledUp) {
+    return;
+  }
+
+  xpToast.textContent = leveledUp ? `Level ${level}! +${xpGained} XP` : `+${xpGained} XP`;
+  xpToast.classList.remove('hidden', 'is-visible', 'is-level-up');
+  void xpToast.offsetWidth;
+  xpToast.classList.add('is-visible');
+
+  if (leveledUp) {
+    xpToast.classList.add('is-level-up');
+  }
+
+  window.setTimeout(() => {
+    xpToast.classList.remove('is-visible', 'is-level-up');
+    xpToast.classList.add('hidden');
+  }, 1700);
 }
 
 function handleStartButtonInteraction(event) {
@@ -894,7 +1150,7 @@ function renderQuizQuestion() {
   });
 }
 
-function handleQuizAnswer(answerIndex) {
+async function handleQuizAnswer(answerIndex) {
   const collectible = activeQuiz;
 
   if (!collectible) {
@@ -902,12 +1158,15 @@ function handleQuizAnswer(answerIndex) {
   }
 
   const question = collectible.item.questions[collectible.questionIndex];
+  const questionIndex = collectible.questionIndex;
 
   if (answerIndex !== question.answer) {
     quizFeedback.textContent = 'Not quite. Take another shot, you are still in it.';
+    await recordAnswerEvent(false, collectible, questionIndex);
     return;
   }
 
+  await recordAnswerEvent(true, collectible, questionIndex);
   collectible.questionIndex += 1;
   void saveAnimalProgress(collectible);
 
@@ -929,6 +1188,7 @@ function collectCollectible(collectible) {
   updateCollectionHud();
   updateModePanels();
   void saveAnimalProgress(collectible);
+  void recordCollectionEvent(collectible);
 
   if (getCollectedCount() === TOTAL_COLLECTIBLES) {
     gameHint.textContent = 'All 3 hidden animals collected. Restart AR to play again.';
@@ -1214,14 +1474,44 @@ function renderJournalDetail() {
 function updateProfilePanel() {
   const collectedCount = getCollectedCount();
   const nearest = getNearestCollectible();
+  const playerLeaderboardEntry = leaderboard.find((entry) => entry.id === playerProfile.id);
 
   profileSummary.textContent = collectedCount === TOTAL_COLLECTIBLES
-    ? 'You cleared the whole route. Restart whenever you want another round.'
-    : 'You are in the middle of a live AR hunt. Stay moving and keep the camera steady.';
+    ? `${playerProfile.name} cleared the route. Keep leveling on the leaderboard.`
+    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${playerProfile.difficulty}.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
+  profileLevel.textContent = playerProfile.level;
+  profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
+  profileStreak.textContent = `${playerProfile.streak}x`;
   profileNearest.textContent = nearest ? `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}` : 'Cleared';
-  profileOcclusion.textContent = hasDepthOcclusion ? 'On' : 'Unavailable';
-  profileFocus.textContent = collectiblesSpawned ? 'Explore' : 'Scanning';
+  profileRank.textContent = playerLeaderboardEntry ? `#${playerLeaderboardEntry.rank}` : '--';
+  profileDifficulty.textContent = playerProfile.difficulty;
+  renderLeaderboard();
+}
+
+function renderLeaderboard() {
+  leaderboardList.replaceChildren();
+
+  if (!leaderboard.length) {
+    const empty = document.createElement('li');
+    empty.textContent = 'No scores yet.';
+    leaderboardList.appendChild(empty);
+    return;
+  }
+
+  leaderboard.slice(0, 5).forEach((entry) => {
+    const item = document.createElement('li');
+    item.classList.toggle('is-you', entry.id === playerProfile.id);
+
+    const name = document.createElement('strong');
+    name.textContent = `${entry.rank}. ${entry.name}`;
+
+    const score = document.createElement('span');
+    score.textContent = `Lv ${entry.level} - ${entry.xp} XP - ${entry.bestStreak}x best`;
+
+    item.append(name, score);
+    leaderboardList.appendChild(item);
+  });
 }
 
 function getCollectedCount() {

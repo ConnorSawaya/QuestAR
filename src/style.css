@@ -519,6 +519,38 @@ h2 {
   line-height: 1;
 }
 
+.xp-toast {
+  position: fixed;
+  top: 42%;
+  left: 50%;
+  z-index: 8;
+  border: 1px solid rgba(121, 240, 194, 0.34);
+  border-radius: 999px;
+  background: rgba(5, 8, 18, 0.86);
+  box-shadow:
+    0 18px 54px rgba(0, 0, 0, 0.45),
+    0 0 36px rgba(121, 240, 194, 0.18);
+  color: #d8fff0;
+  padding: 0.72rem 1rem;
+  font-size: 1.15rem;
+  font-weight: 950;
+  letter-spacing: -0.03em;
+  pointer-events: none;
+  transform: translate(-50%, 0) scale(0.82);
+}
+
+.xp-toast.is-visible {
+  animation: xp-pop 1.7s ease forwards;
+}
+
+.xp-toast.is-level-up {
+  border-color: rgba(255, 178, 125, 0.5);
+  color: #fff3d6;
+  box-shadow:
+    0 18px 54px rgba(0, 0, 0, 0.45),
+    0 0 52px rgba(255, 178, 125, 0.28);
+}
+
 .tab-bar {
   position: fixed;
   left: 0;
@@ -835,6 +867,62 @@ h2 {
   font-size: 1rem;
 }
 
+.leaderboard-card {
+  margin-top: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.8rem 0.9rem;
+}
+
+.leaderboard-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.leaderboard-card__header span {
+  border: 1px solid rgba(121, 240, 194, 0.28);
+  border-radius: 999px;
+  color: #d8fff0;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.leaderboard-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.leaderboard-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  border-radius: 0.75rem;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 0.52rem 0.6rem;
+}
+
+.leaderboard-list li.is-you {
+  background: rgba(121, 240, 194, 0.1);
+}
+
+.leaderboard-list strong {
+  font-size: 0.82rem;
+}
+
+.leaderboard-list span {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.76rem;
+  text-align: right;
+}
+
 .quiz-panel {
   gap: 0.85rem;
 }
@@ -1028,6 +1116,28 @@ body.is-ar-active .status {
   }
 }
 
+@keyframes xp-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0.9rem) scale(0.82);
+  }
+
+  18% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1.08);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -1.2rem) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -2.1rem) scale(0.94);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .brand-letter,
   .landing-copy .hero__badge,
@@ -1037,6 +1147,7 @@ body.is-ar-active .status {
   .landing-actions h2,
   .landing-brief,
   .landing-actions .button,
+  .xp-toast,
   .orbit-track,
   .radar-dot {
     animation: none;

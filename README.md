@@ -4,7 +4,12 @@ A mobile-first WebXR scavenger hunt built with Vite, JavaScript, and Three.js.
 
 Players start an immersive AR session, scan the floor, follow a radar route, and walk to reveal three hidden animals: Panda, Lion, and Elephant. Each animal stays anchored after discovery and can be collected by getting close, centering it, tapping it, and answering its trivia quiz.
 
-Progress is saved in the browser with IndexedDB. That means achievements and quiz progress persist on the same device whether the app is running locally or deployed to Railway.
+Animal achievement progress is saved in the browser with IndexedDB. XP, answer streaks, levels, collected animal counts, and the global leaderboard are saved through the Node server.
+
+The server uses:
+
+1. PostgreSQL when `DATABASE_URL` exists, which is the recommended Railway setup.
+2. A local `.data/quest-ar-db.json` file when `DATABASE_URL` is not set, which is useful for local testing.
 
 ## Run Locally
 
@@ -27,6 +32,15 @@ npm start
 
 `npm start` serves the `dist` folder through `server.js`. It uses Railway's `PORT` environment variable automatically and falls back to port `4173` locally.
 
+The local server also exposes:
+
+```text
+GET  /api/profile?playerId=...
+POST /api/answer
+POST /api/collect
+GET  /api/leaderboard
+```
+
 ## Railway
 
 Use the default Node deployment flow:
@@ -37,7 +51,9 @@ npm run build
 npm start
 ```
 
-No separate hosted database is required for this version because progress is stored in the player's browser database.
+Add a Railway PostgreSQL database to the project so Railway provides `DATABASE_URL`. The app will create its `players` table automatically on startup.
+
+Without `DATABASE_URL`, the server still works using the local JSON database fallback, but that is not recommended for production leaderboards.
 
 ## Test On Android Chrome
 

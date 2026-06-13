@@ -90,17 +90,32 @@
               <strong id="profile-progress">0/3</strong>
             </div>
             <div class="stat-card">
+              <span>Level</span>
+              <strong id="profile-level">1</strong>
+            </div>
+            <div class="stat-card">
+              <span>XP</span>
+              <strong id="profile-xp">0/120</strong>
+            </div>
+            <div class="stat-card">
+              <span>Streak</span>
+              <strong id="profile-streak">0</strong>
+            </div>
+            <div class="stat-card">
               <span>Nearest</span>
               <strong id="profile-nearest">Waiting</strong>
             </div>
             <div class="stat-card">
-              <span>Occlusion</span>
-              <strong id="profile-occlusion">Off</strong>
+              <span>Rank</span>
+              <strong id="profile-rank">--</strong>
             </div>
-            <div class="stat-card">
-              <span>Focus</span>
-              <strong id="profile-focus">Steady</strong>
+          </div>
+          <div class="leaderboard-card">
+            <div class="leaderboard-card__header">
+              <strong>Global Leaderboard</strong>
+              <span id="profile-difficulty">Easy</span>
             </div>
+            <ol id="leaderboard-list" class="leaderboard-list"></ol>
           </div>
         </section>
       </section>
@@ -116,6 +131,8 @@
         <span id="closest-arrow-icon">↑</span>
         <strong id="closest-arrow-label">Find animal</strong>
       </div>
+
+      <div id="xp-toast" class="xp-toast hidden" aria-live="polite"></div>
 
       <section id="quiz-panel" class="panel hud-panel quiz-panel hidden" aria-label="Trivia quiz panel">
         <p class="eyebrow" id="quiz-step">Question 1 of 3</p>
