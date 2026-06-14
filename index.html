@@ -83,16 +83,10 @@
 
         <section id="mode-radar" class="mode-panel hidden" aria-label="Radar mode panel">
           <p class="eyebrow">Radar</p>
-          <h2>Closest Orb</h2>
+          <h2>Track An Orb</h2>
           <p id="radar-summary">Scanning for your next orb.</p>
           <div id="radar-list" class="radar-compass" aria-label="Closest orb direction"></div>
-        </section>
-
-        <section id="mode-map" class="mode-panel hidden" aria-label="Map mode panel">
-          <p class="eyebrow">Map</p>
-          <h2>Local Hunt Zone</h2>
-          <p id="map-summary">Enable location to see nearby orb zones in a 3-mile radius.</p>
-          <div id="area-map" class="area-map" aria-label="Local hunt area map"></div>
+          <ul id="radar-targets" class="radar-target-list" aria-label="Trackable orb list"></ul>
         </section>
 
         <section id="mode-journal" class="mode-panel hidden" aria-label="Journal mode panel">
@@ -166,7 +160,6 @@
       <nav id="tab-bar" class="tab-bar hidden" aria-label="AR bottom tabs">
         <button class="tab-button is-active" type="button" data-mode="hunt">Hunt</button>
         <button class="tab-button" type="button" data-mode="radar">Radar</button>
-        <button class="tab-button" type="button" data-mode="map">Map</button>
         <button class="tab-button" type="button" data-mode="journal">Journal</button>
         <button class="tab-button" type="button" data-mode="you">You</button>
       </nav>
