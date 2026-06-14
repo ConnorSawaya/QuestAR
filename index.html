@@ -48,6 +48,13 @@
             </div>
             <label class="topic-input-label" for="topic-input">Topic prompt</label>
             <textarea id="topic-input" rows="3" placeholder="Example: Make a harder quest about acids and bases for a chemistry test"></textarea>
+            <label class="topic-input-label" for="topic-difficulty">Difficulty</label>
+            <select id="topic-difficulty" class="topic-select">
+              <option value="Easy">Easy</option>
+              <option value="Medium">Medium</option>
+              <option value="Hard">Hard</option>
+              <option value="Expert">Expert</option>
+            </select>
             <button id="topic-generate" class="button button--secondary" type="submit">Generate Topic Orbs</button>
             <p id="topic-status" class="status">Generate questions to launch AR automatically.</p>
           </form>
@@ -172,13 +179,18 @@
       <div id="xp-toast" class="xp-toast hidden" aria-live="polite"></div>
 
       <section id="quiz-panel" class="panel hud-panel quiz-panel hidden" aria-label="Trivia quiz panel">
-        <p class="eyebrow" id="quiz-step">Question 1 of 3</p>
+        <div class="quiz-meta-row">
+          <p class="eyebrow" id="quiz-step">Question 1 of 3</p>
+          <strong id="quiz-timer" class="quiz-timer">20s</strong>
+        </div>
         <h2 id="quiz-title">Trivia Object</h2>
         <p id="quiz-intro" class="quiz-intro">A quick challenge stands between you and this orb.</p>
         <p id="quiz-prompt">Question prompt</p>
         <div id="quiz-options" class="quiz-options"></div>
         <p id="quiz-feedback" class="status"></p>
-        <button id="quiz-close" class="button button--secondary button--small" type="button">Close Quiz</button>
+        <div class="quiz-footer">
+          <button id="quiz-close" class="button button--secondary button--small" type="button">Close Quiz</button>
+        </div>
       </section>
 
       <section id="unsupported" class="panel hidden" aria-label="Unsupported device message">

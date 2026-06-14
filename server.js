@@ -77,6 +77,7 @@ async function handleApiRequest(request, response, url) {
       animalId: String(body.animalId || ''),
       questionIndex: Number(body.questionIndex || 0),
       correct: Boolean(body.correct),
+      bonusMultiplier: Number(body.bonusMultiplier || 1),
     });
 
     sendJson(response, 200, { ...result, leaderboard: await getLeaderboard() });
@@ -243,7 +244,7 @@ async function saveProfile(profile) {
   await writeLocalDb(db);
 }
 
-async function recordAnswer({ playerId, name, animalId, questionIndex, correct }) {
+async function recordAnswer({ playerId, name, animalId, questionIndex, correct, bonusMultiplier }) {
   const profile = await ensureProfile(playerId, name);
   const previousLevel = getLevelForXp(profile.xp);
   profile.answersTotal += 1;
@@ -254,7 +255,7 @@ async function recordAnswer({ playerId, name, animalId, questionIndex, correct }
     profile.answersCorrect += 1;
     profile.streak += 1;
     profile.bestStreak = Math.max(profile.bestStreak, profile.streak);
-    xpGained = getAnswerXp(profile.level, profile.streak, questionIndex);
+    xpGained = getAnswerXp(profile.level, profile.streak, questionIndex, bonusMultiplier);
     profile.xp += xpGained;
   } else {
     profile.streak = 0;
@@ -318,11 +319,12 @@ async function getLeaderboard() {
     }));
 }
 
-function getAnswerXp(level, streak, questionIndex) {
+function getAnswerXp(level, streak, questionIndex, bonusMultiplier = 1) {
   const levelBonus = Math.min(level * 2, 24);
   const streakBonus = Math.min(streak * 4, 40);
   const questionBonus = Math.max(questionIndex, 0) * 3;
-  return 22 + levelBonus + streakBonus + questionBonus;
+  const safeMultiplier = Math.min(Math.max(Number(bonusMultiplier) || 1, 1), 2);
+  return Math.round((22 + levelBonus + streakBonus + questionBonus) * safeMultiplier);
 }
 
 function getCollectionXp(level) {
@@ -409,7 +411,7 @@ async function generateTopicOrbs({ topic, difficulty, count, accuracy }) {
   const fallback = () => generateFallbackOrbs({ topic, difficulty, count, accuracy });
 
   if (!process.env.NVIDIA_API_KEY) {
-    return { source: 'fallback', ...fallback() };
+    return { source: 'fallback', difficulty, ...fallback() };
   }
 
   try {
@@ -444,10 +446,10 @@ async function generateTopicOrbs({ topic, difficulty, count, accuracy }) {
     const content = payload.choices?.[0]?.message?.content || '';
     const parsed = parseJsonObject(content);
     const normalized = normalizeGeneratedOrbs(parsed, { topic, difficulty, count });
-    return { source: 'nim', ...normalized };
+    return { source: 'nim', difficulty, ...normalized };
   } catch (error) {
     console.warn('NIM generation failed, using fallback:', error.message);
-    return { source: 'fallback', ...fallback() };
+    return { source: 'fallback', difficulty, ...fallback() };
   }
 }
 
@@ -515,9 +517,10 @@ function normalizeQuestion(question) {
 
 function generateFallbackOrbs({ topic, difficulty, count, accuracy }) {
   const category = normalizeCategory(topic);
-  const hard = difficulty === 'Hard' || difficulty === 'Expert' || accuracy >= 0.82;
+  const expert = difficulty === 'Expert' || accuracy >= 0.92;
+  const hard = expert || difficulty === 'Hard' || accuracy >= 0.82;
   const medium = hard || difficulty === 'Medium' || accuracy >= 0.62;
-  const templates = getFallbackQuestionTemplates(category, topic, { hard, medium });
+  const templates = getFallbackQuestionTemplates(category, topic, { expert, hard, medium });
   const orbs = Array.from({ length: count }, (_, index) => {
     const title = getFallbackTitle(category, topic, index);
     return {
@@ -525,7 +528,7 @@ function generateFallbackOrbs({ topic, difficulty, count, accuracy }) {
       title,
       category,
       accent: getCategoryAccent(category),
-      rarity: hard ? 'Expert Signal' : medium ? 'Focused Signal' : 'Starter Signal',
+      rarity: expert ? 'Master Signal' : hard ? 'Expert Signal' : medium ? 'Focused Signal' : 'Starter Signal',
       trait: getCategoryTrait(category),
       journalNote: `You learned a ${topic} idea from ${title}.`,
       questions: templates.slice(index * 3, index * 3 + 3).map((question, questionIndex) => question || makeGenericQuestion(topic, index, questionIndex, hard)),
@@ -539,7 +542,7 @@ function generateFallbackOrbs({ topic, difficulty, count, accuracy }) {
   };
 }
 
-function getFallbackQuestionTemplates(category, topic, { hard, medium }) {
+function getFallbackQuestionTemplates(category, topic, { expert, hard, medium }) {
   const banks = {
     chemistry: [
       ['What does pH measure?', ['Acidity', 'Mass', 'Temperature'], 0],
@@ -591,7 +594,13 @@ function getFallbackQuestionTemplates(category, topic, { hard, medium }) {
 
   while (repeated.length < 30) {
     selected.forEach(([prompt, options, answer]) => repeated.push({
-      prompt: hard ? `${prompt} Choose the most precise answer.` : medium ? `${prompt} Think carefully.` : prompt,
+      prompt: expert
+        ? `${prompt} Choose the most precise answer and watch for subtle distractors.`
+        : hard
+          ? `${prompt} Choose the most precise answer.`
+          : medium
+            ? `${prompt} Think carefully.`
+            : prompt,
       options,
       answer,
     }));

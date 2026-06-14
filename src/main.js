@@ -10,6 +10,7 @@ let TOTAL_COLLECTIBLES = 6;
 const REVEAL_DISTANCE_METERS = 4;
 const INTERACTION_DISTANCE_METERS = 3;
 const MAP_RADIUS_MILES = 3;
+const QUESTION_TIME_LIMIT_SECONDS = 20;
 const DB_NAME = 'quest-ar-progress';
 const DB_VERSION = 1;
 const PROGRESS_STORE = 'animalProgress';
@@ -165,6 +166,7 @@ const topicForm = document.querySelector('#topic-form');
 const topicInput = document.querySelector('#topic-input');
 const topicMessages = document.querySelector('#topic-messages');
 const topicGenerate = document.querySelector('#topic-generate');
+const topicDifficultySelect = document.querySelector('#topic-difficulty');
 const topicStatus = document.querySelector('#topic-status');
 const radarSummary = document.querySelector('#radar-summary');
 const radarList = document.querySelector('#radar-list');
@@ -195,6 +197,7 @@ const xpToast = document.querySelector('#xp-toast');
 const quizPanel = document.querySelector('#quiz-panel');
 const quizTitle = document.querySelector('#quiz-title');
 const quizStep = document.querySelector('#quiz-step');
+const quizTimer = document.querySelector('#quiz-timer');
 const quizIntro = document.querySelector('#quiz-intro');
 const quizPrompt = document.querySelector('#quiz-prompt');
 const quizOptions = document.querySelector('#quiz-options');
@@ -229,6 +232,7 @@ let currentTopicSummary = 'Starter science, math, geology, coding, biology, and 
 let topicReady = false;
 let arSupported = false;
 let generatingTopic = false;
+let selectedTopicDifficulty = topicDifficultySelect.value;
 let playerId = getOrCreatePlayerId();
 let playerName = getOrCreatePlayerName();
 let playerProfile = getDefaultProfile();
@@ -243,6 +247,10 @@ let locationWatchId = null;
 let lastAreaMapRenderKey = '';
 let usageStats = getUsageStats();
 let lastUsageTickMs = Date.now();
+let activeQuizTimerId = null;
+let activeQuizDeadlineMs = 0;
+let activeQuestionBonusMultiplier = 1;
+let quizResolutionInFlight = false;
 
 const SIMULATED_COMPETITORS = [
   { id: 'sim-lyra', name: 'Lyra', xp: 1180, bestStreak: 18, streak: 5 },
@@ -257,6 +265,7 @@ const selectionOrigin = new THREE.Vector3();
 const selectionDirection = new THREE.Vector3();
 const cameraWorldPosition = new THREE.Vector3();
 const upAxis = new THREE.Vector3(0, 1, 0);
+const orbTextureCache = new Map();
 
 initScene();
 startLocationTracking();
@@ -278,6 +287,7 @@ startButton.addEventListener('touchend', handleStartButtonInteraction, { passive
 startButton.addEventListener('click', handleStartButtonInteraction);
 quizClose.addEventListener('click', closeQuizPanel);
 topicForm.addEventListener('submit', handleTopicSubmit);
+topicDifficultySelect.addEventListener('change', handleTopicDifficultyChange);
 regenerateTopic.addEventListener('click', openTopicRegenerator);
 document.addEventListener('visibilitychange', handleVisibilityUsageSync);
 window.addEventListener('beforeunload', persistUsageTick);
@@ -484,6 +494,11 @@ function updateStartButtonState() {
   startButton.textContent = topicReady ? 'Opening AR...' : 'Waiting for topic';
 }
 
+function handleTopicDifficultyChange() {
+  selectedTopicDifficulty = topicDifficultySelect.value;
+  updateModePanels();
+}
+
 async function handleTopicSubmit(event) {
   event.preventDefault();
 
@@ -507,7 +522,7 @@ async function generateTopicQuest(topic, resetExisting) {
     const payload = await postApi('/api/generate-topic', {
       topic,
       count: 6,
-      difficulty: playerProfile.difficulty,
+      difficulty: selectedTopicDifficulty,
       accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
     });
     applyGeneratedTopic(payload, resetExisting);
@@ -545,6 +560,8 @@ function applyGeneratedTopic(payload, resetExisting) {
   selectedJournalAnimalId = orbs[0].id;
   currentTopicPrompt = payload.topic || currentTopicPrompt;
   currentTopicSummary = payload.summary || currentTopicSummary;
+  selectedTopicDifficulty = payload.difficulty || selectedTopicDifficulty;
+  topicDifficultySelect.value = selectedTopicDifficulty;
   topicReady = true;
 
   if (resetExisting && collectiblesSpawned) {
@@ -590,7 +607,7 @@ async function openTopicRegenerator() {
   }
 
   topicInput.focus();
-  topicStatus.textContent = 'Enter a new topic to regenerate your AR orbs.';
+  topicStatus.textContent = `Enter a new topic to regenerate your ${selectedTopicDifficulty.toLowerCase()} AR orbs.`;
 }
 
 function getOrCreatePlayerId() {
@@ -652,14 +669,15 @@ async function refreshPlayerProfile() {
   }
 }
 
-async function recordAnswerEvent(correct, collectible, questionIndex) {
+async function recordAnswerEvent(correct, collectible, questionIndex, bonusMultiplier = 1) {
   const payload = await postApi('/api/answer', {
     playerId,
     name: playerName,
     animalId: collectible.item.id,
     questionIndex,
     correct,
-  }).catch(() => applyLocalAnswerEvent(correct, questionIndex));
+    bonusMultiplier,
+  }).catch(() => applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier));
 
   applyProfilePayload(payload);
   showXpToast(payload.xpGained || 0, payload.leveledUp, payload.profile?.level);
@@ -718,7 +736,7 @@ function applyProfilePayload(payload) {
   updateModePanels();
 }
 
-function applyLocalAnswerEvent(correct, questionIndex) {
+function applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier = 1) {
   const previousLevel = playerProfile.level;
   let xpGained = 0;
   const nextProfile = { ...playerProfile };
@@ -728,7 +746,7 @@ function applyLocalAnswerEvent(correct, questionIndex) {
     nextProfile.answersCorrect += 1;
     nextProfile.streak += 1;
     nextProfile.bestStreak = Math.max(nextProfile.bestStreak, nextProfile.streak);
-    xpGained = getClientAnswerXp(nextProfile.level, nextProfile.streak, questionIndex);
+    xpGained = getClientAnswerXp(nextProfile.level, nextProfile.streak, questionIndex, bonusMultiplier);
     nextProfile.xp += xpGained;
   } else {
     nextProfile.streak = 0;
@@ -778,8 +796,9 @@ function decorateClientProfile(profile) {
   };
 }
 
-function getClientAnswerXp(level, streak, questionIndex) {
-  return 22 + Math.min(level * 2, 24) + Math.min(streak * 4, 40) + Math.max(questionIndex, 0) * 3;
+function getClientAnswerXp(level, streak, questionIndex, bonusMultiplier = 1) {
+  const baseXp = 22 + Math.min(level * 2, 24) + Math.min(streak * 4, 40) + Math.max(questionIndex, 0) * 3;
+  return Math.round(baseXp * Math.min(Math.max(bonusMultiplier, 1), 2));
 }
 
 function getClientLevelForXp(xp) {
@@ -1005,6 +1024,7 @@ function endARSession() {
   hitTestSourceRequested = false;
   stableFloorFrames = 0;
   reticle.visible = false;
+  stopQuizTimer();
   resetCollectibles();
   closeQuizPanel();
   gamePanel.classList.add('hidden');
@@ -1240,100 +1260,152 @@ function createCollectible(item, groundPosition) {
 
 function createTopicOrbModel(item) {
   const group = new THREE.Group();
-  const accent = new THREE.Color(item.accent || '#79f0c2');
+  const palette = getOrbPalette(item.category, item.accent);
+  const coreColor = new THREE.Color(palette.core);
+  const shellColor = new THREE.Color(palette.shell);
+  const glowColor = new THREE.Color(palette.glow);
+  const flareTexture = getOrbFlareTexture(palette.flameInner, palette.flameOuter);
+  const standMetal = new THREE.MeshStandardMaterial({ color: 0xb8c3d7, metalness: 0.88, roughness: 0.28 });
+  const standShadow = new THREE.MeshStandardMaterial({ color: 0x536071, metalness: 0.78, roughness: 0.44 });
   const coreMaterial = new THREE.MeshStandardMaterial({
-    color: accent,
-    emissive: accent,
-    emissiveIntensity: 0.08,
-    roughness: 0.42,
-    metalness: 0.12,
+    color: shellColor,
+    emissive: glowColor,
+    emissiveIntensity: 0.3,
+    roughness: 0.18,
+    metalness: 0.08,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.96,
   });
-  const symbolMaterial = new THREE.MeshStandardMaterial({ color: 0xf8fbff, emissive: accent, emissiveIntensity: 0.16, roughness: 0.48 });
-  const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x071020, roughness: 0.66 });
+  const innerCoreMaterial = new THREE.MeshStandardMaterial({
+    color: coreColor,
+    emissive: coreColor,
+    emissiveIntensity: 0.38,
+    roughness: 0.12,
+    metalness: 0.04,
+  });
+  const auraMaterial = new THREE.MeshBasicMaterial({
+    color: glowColor,
+    transparent: true,
+    opacity: 0.22,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const bandMaterial = new THREE.MeshStandardMaterial({
+    color: shellColor,
+    emissive: glowColor,
+    emissiveIntensity: 0.25,
+    roughness: 0.28,
+    metalness: 0.16,
+    transparent: true,
+    opacity: 0.86,
+  });
 
-  addSphere(group, coreMaterial, [0, 0.12, 0], [0.34, 0.34, 0.34]);
+  addCylinder(group, standShadow, [0, -0.16, 0], [0.19, 0.19, 0.1], 0, 0, 0);
+  addCylinder(group, standMetal, [0, -0.07, 0], [0.13, 0.13, 0.12], 0, 0, 0);
+  addCylinder(group, standMetal, [0, 0.01, 0], [0.09, 0.09, 0.12], 0, 0, 0);
 
-  const shell = new THREE.Mesh(
-    new THREE.TorusGeometry(0.39, 0.012, 12, 72),
-    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.88 }),
-  );
-  shell.rotation.set(Math.PI / 2, 0.2, 0.15);
-  shell.position.y = 0.12;
-  group.add(shell);
+  const outerAura = addSphere(group, auraMaterial, [0, 0.26, 0], [0.42, 0.42, 0.42]);
+  const shell = addSphere(group, coreMaterial, [0, 0.24, 0], [0.29, 0.29, 0.29]);
+  const innerCore = addSphere(group, innerCoreMaterial, [0, 0.24, 0], [0.21, 0.21, 0.21]);
 
-  addCategoryGlyph(group, item.category, symbolMaterial, darkMaterial, accent);
+  const bands = [0, 1, 2].map((index) => {
+    const torus = new THREE.Mesh(new THREE.TorusGeometry(0.24 + index * 0.018, 0.022, 16, 64), bandMaterial.clone());
+    torus.position.y = 0.24;
+    torus.rotation.set(index * 0.65, index * 0.44, index * 0.28);
+    group.add(torus);
+    return torus;
+  });
+
+  const flameSprites = Array.from({ length: 5 }, (_, index) => {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: flareTexture,
+      color: shellColor,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }));
+    const angle = (index / 5) * Math.PI * 2;
+    sprite.position.set(Math.cos(angle) * 0.12, 0.48 + Math.sin(angle * 2) * 0.02, Math.sin(angle) * 0.12);
+    sprite.scale.set(0.3, 0.38, 1);
+    group.add(sprite);
+    return sprite;
+  });
+
+  const sparkSprites = Array.from({ length: 6 }, (_, index) => {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: flareTexture,
+      color: glowColor,
+      transparent: true,
+      opacity: 0.45,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }));
+    const angle = (index / 6) * Math.PI * 2;
+    sprite.position.set(Math.cos(angle) * 0.22, 0.28 + ((index % 2) * 0.08), Math.sin(angle) * 0.22);
+    sprite.scale.set(0.08, 0.1, 1);
+    group.add(sprite);
+    return sprite;
+  });
+
+  group.userData = {
+    outerAura,
+    shell,
+    innerCore,
+    bands,
+    flameSprites,
+    sparkSprites,
+  };
+
   return group;
 }
 
-function addCategoryGlyph(group, category, material, darkMaterial, accent) {
-  switch (normalizeClientCategory(category)) {
-    case 'chemistry':
-      addCylinder(group, material, [0, 0.29, 0.26], [0.035, 0.035, 0.22], 0, 0, 0);
-      addCylinder(group, material, [0, 0.13, 0.27], [0.12, 0.12, 0.2], 0, 0, 0);
-      addSphere(group, new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.18, roughness: 0.35 }), [0, 0.05, 0.27], [0.1, 0.04, 0.1]);
-      break;
-    case 'math':
-      addBox(group, material, [0, 0.13, 0.32], [0.32, 0.055, 0.055]);
-      addBox(group, material, [0, 0.13, 0.32], [0.055, 0.32, 0.055]);
-      break;
-    case 'geology':
-      addRock(group, material, [0, 0.12, 0.28]);
-      break;
-    case 'computer-science':
-      addBox(group, darkMaterial, [0, 0.14, 0.29], [0.3, 0.18, 0.035]);
-      addBox(group, material, [0, 0.25, 0.28], [0.24, 0.015, 0.035]);
-      addBox(group, material, [0, 0.02, 0.32], [0.36, 0.035, 0.18]);
-      break;
-    case 'biology':
-      for (let index = 0; index < 6; index += 1) {
-        const y = -0.04 + index * 0.07;
-        const x = Math.sin(index * 1.2) * 0.12;
-        addSphere(group, material, [x, y + 0.1, 0.32], [0.035, 0.035, 0.035]);
-        addSphere(group, material, [-x, y + 0.1, 0.32], [0.035, 0.035, 0.035]);
-        addCylinder(group, material, [0, y + 0.1, 0.32], [0.012, 0.012, Math.max(Math.abs(x) * 2, 0.06)], Math.PI / 2, 0, Math.PI / 2);
-      }
-      break;
-    case 'space': {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.018, 12, 54), material);
-      ring.rotation.set(Math.PI / 2.9, 0, -0.38);
-      ring.position.set(0, 0.12, 0.28);
-      group.add(ring);
-      addSphere(group, material, [0, 0.12, 0.32], [0.12, 0.12, 0.12]);
-      break;
-    }
-    case 'history':
-      addCylinder(group, material, [0, 0.1, 0.3], [0.06, 0.06, 0.28], 0, 0, 0);
-      addBox(group, material, [0, 0.27, 0.3], [0.28, 0.04, 0.08]);
-      addBox(group, material, [0, -0.07, 0.3], [0.3, 0.04, 0.09]);
-      break;
-    case 'art':
-      addSphere(group, material, [0, 0.12, 0.29], [0.18, 0.12, 0.04]);
-      addSphere(group, darkMaterial, [0.08, 0.17, 0.34], [0.025, 0.025, 0.012]);
-      addSphere(group, darkMaterial, [-0.05, 0.09, 0.34], [0.02, 0.02, 0.012]);
-      addSphere(group, darkMaterial, [0.01, 0.2, 0.34], [0.018, 0.018, 0.012]);
-      break;
-    case 'literature':
-      addBox(group, darkMaterial, [-0.06, 0.12, 0.3], [0.15, 0.24, 0.035]);
-      addBox(group, material, [0.06, 0.12, 0.31], [0.15, 0.24, 0.035]);
-      addBox(group, material, [0, 0.12, 0.34], [0.022, 0.24, 0.02]);
-      break;
-    default:
-      addBox(group, material, [0, 0.13, 0.31], [0.24, 0.06, 0.06]);
-      addBox(group, material, [0, 0.13, 0.31], [0.06, 0.24, 0.06]);
-      addBox(group, material, [0, 0.13, 0.31], [0.06, 0.06, 0.24]);
-      break;
-  }
+function getOrbPalette(category, fallbackAccent) {
+  const normalizedCategory = normalizeClientCategory(category);
+  const palettes = {
+    chemistry: { core: '#9effa0', shell: '#39ff6d', glow: '#59ffcf', flameInner: '#b8ff7b', flameOuter: '#2adf57' },
+    math: { core: '#ffd86b', shell: '#ff9c2f', glow: '#ffb347', flameInner: '#ffe78a', flameOuter: '#ff7c25' },
+    geology: { core: '#ff9d5c', shell: '#ff5a2b', glow: '#ff7f50', flameInner: '#ffc27a', flameOuter: '#ff4b1f' },
+    'computer-science': { core: '#6dd4ff', shell: '#228dff', glow: '#5ba8ff', flameInner: '#89f3ff', flameOuter: '#1d6cff' },
+    biology: { core: '#77ff8c', shell: '#22d65a', glow: '#3dff9d', flameInner: '#b8ff9f', flameOuter: '#1fa74f' },
+    history: { core: '#ffcf86', shell: '#ff9140', glow: '#ffb36b', flameInner: '#ffe7b0', flameOuter: '#ff6b2e' },
+    space: { core: '#7be0ff', shell: '#3f63ff', glow: '#8e7cff', flameInner: '#92edff', flameOuter: '#4d74ff' },
+    art: { core: '#ff8bff', shell: '#ff45c7', glow: '#ff6edb', flameInner: '#ffc0ff', flameOuter: '#ff3d9b' },
+    literature: { core: '#d58cff', shell: '#a64dff', glow: '#d88bff', flameInner: '#f6c5ff', flameOuter: '#c956ff' },
+    general: { core: fallbackAccent || '#79f0c2', shell: fallbackAccent || '#79f0c2', glow: '#b4fff0', flameInner: '#eaffff', flameOuter: fallbackAccent || '#79f0c2' },
+  };
+
+  return palettes[normalizedCategory] || palettes.general;
 }
 
-function addRock(group, material, position) {
-  const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(0.18, 0), material);
-  mesh.position.set(...position);
-  mesh.scale.set(1.1, 0.82, 0.72);
-  mesh.rotation.set(0.35, 0.2, -0.18);
-  group.add(mesh);
-  return mesh;
+function getOrbFlareTexture(innerColor, outerColor) {
+  const cacheKey = `${innerColor}-${outerColor}`;
+
+  if (orbTextureCache.has(cacheKey)) {
+    return orbTextureCache.get(cacheKey);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  const gradient = context.createRadialGradient(128, 160, 10, 128, 160, 110);
+  gradient.addColorStop(0, innerColor);
+  gradient.addColorStop(0.4, `${innerColor}cc`);
+  gradient.addColorStop(1, `${outerColor}00`);
+
+  context.clearRect(0, 0, 256, 256);
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.moveTo(128, 18);
+  context.bezierCurveTo(214, 54, 214, 148, 128, 238);
+  context.bezierCurveTo(42, 148, 42, 54, 128, 18);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  orbTextureCache.set(cacheKey, texture);
+  return texture;
 }
 
 function addSphere(group, material, position, scale) {
@@ -1427,6 +1499,25 @@ function updateCollectibles(timeSeconds) {
     collectible.card.lookAt(cameraWorldPosition);
     collectible.hitArea.lookAt(cameraWorldPosition);
 
+    const orbVisuals = collectible.orbModel.userData;
+    orbVisuals?.bands?.forEach((band, index) => {
+      band.rotation.x += 0.003 + index * 0.0014;
+      band.rotation.y += 0.005 + index * 0.001;
+    });
+    orbVisuals?.flameSprites?.forEach((sprite, index) => {
+      const flamePulse = 1 + Math.sin(timeSeconds * 4 + collectible.bobOffset + index) * 0.12;
+      sprite.scale.set(0.3 * flamePulse, 0.38 * flamePulse, 1);
+      sprite.material.opacity = 0.72 + Math.sin(timeSeconds * 5 + index) * 0.16;
+    });
+    orbVisuals?.sparkSprites?.forEach((sprite, index) => {
+      const sparkPulse = 1 + Math.sin(timeSeconds * 3 + collectible.bobOffset + index * 0.6) * 0.18;
+      sprite.scale.set(0.08 * sparkPulse, 0.1 * sparkPulse, 1);
+      sprite.material.opacity = 0.32 + Math.sin(timeSeconds * 4 + index) * 0.1;
+    });
+    if (orbVisuals?.outerAura?.material) {
+      orbVisuals.outerAura.material.opacity = 0.18 + Math.sin(timeSeconds * 2.8 + collectible.bobOffset) * 0.05;
+    }
+
     const isHighlighted = collectible === highlightedCollectible;
     collectible.floatRig.scale.setScalar(isHighlighted ? 1.08 : 1);
     collectible.orbModel.traverse((child) => {
@@ -1465,6 +1556,7 @@ function getCenteredCollectible() {
 
 function openQuizForCollectible(collectible) {
   activeQuiz = collectible;
+  quizResolutionInFlight = false;
   quizFeedback.textContent = '';
   renderQuizQuestion();
   quizPanel.classList.remove('hidden');
@@ -1474,13 +1566,21 @@ function openQuizForCollectible(collectible) {
 
 function renderQuizQuestion() {
   const collectible = activeQuiz;
+
+  if (!collectible) {
+    return;
+  }
+
   const question = collectible.item.questions[collectible.questionIndex];
+  quizResolutionInFlight = false;
+  activeQuestionBonusMultiplier = 1;
 
   quizTitle.textContent = `You found ${collectible.item.title}`;
   quizStep.textContent = `Question ${collectible.questionIndex + 1} of ${collectible.item.questions.length}`;
   quizIntro.textContent = 'Keep your streak going. Get all 3 right to complete this orb.';
   quizPrompt.textContent = question.prompt;
   quizOptions.replaceChildren();
+  startQuizTimer();
 
   question.options.forEach((option, index) => {
     const button = document.createElement('button');
@@ -1495,20 +1595,24 @@ function renderQuizQuestion() {
 async function handleQuizAnswer(answerIndex) {
   const collectible = activeQuiz;
 
-  if (!collectible) {
+  if (!collectible || quizResolutionInFlight) {
     return;
   }
 
+  quizResolutionInFlight = true;
+  stopQuizTimer();
   const question = collectible.item.questions[collectible.questionIndex];
   const questionIndex = collectible.questionIndex;
 
   if (answerIndex !== question.answer) {
     quizFeedback.textContent = 'Not quite. Take another shot, you are still in it.';
-    await recordAnswerEvent(false, collectible, questionIndex);
+    await recordAnswerEvent(false, collectible, questionIndex, 1);
+    renderQuizQuestion();
     return;
   }
 
-  await recordAnswerEvent(true, collectible, questionIndex);
+  activeQuestionBonusMultiplier = getQuestionBonusMultiplier();
+  await recordAnswerEvent(true, collectible, questionIndex, activeQuestionBonusMultiplier);
   collectible.questionIndex += 1;
   void saveAnimalProgress(collectible);
 
@@ -1517,7 +1621,60 @@ async function handleQuizAnswer(answerIndex) {
     return;
   }
 
-  quizFeedback.textContent = `Nice. ${collectible.item.questions.length - collectible.questionIndex} more to go.`;
+  const bonusLabel = activeQuestionBonusMultiplier > 1 ? ` x${activeQuestionBonusMultiplier.toFixed(2)} bonus` : '';
+  quizFeedback.textContent = `Nice.${bonusLabel} ${collectible.item.questions.length - collectible.questionIndex} more to go.`;
+  renderQuizQuestion();
+}
+
+function startQuizTimer() {
+  stopQuizTimer();
+  activeQuizDeadlineMs = Date.now() + QUESTION_TIME_LIMIT_SECONDS * 1000;
+  updateQuizTimerDisplay();
+  activeQuizTimerId = window.setInterval(updateQuizTimerDisplay, 100);
+}
+
+function stopQuizTimer() {
+  if (activeQuizTimerId !== null) {
+    window.clearInterval(activeQuizTimerId);
+    activeQuizTimerId = null;
+  }
+}
+
+function updateQuizTimerDisplay() {
+  if (!activeQuiz) {
+    stopQuizTimer();
+    quizTimer.textContent = `${QUESTION_TIME_LIMIT_SECONDS}s`;
+    quizTimer.classList.remove('is-urgent');
+    return;
+  }
+
+  const remainingMs = Math.max(0, activeQuizDeadlineMs - Date.now());
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  quizTimer.textContent = `${remainingSeconds}s`;
+  quizTimer.classList.toggle('is-urgent', remainingSeconds <= 5);
+
+  if (remainingMs <= 0 && !quizResolutionInFlight) {
+    void handleQuizTimeout();
+  }
+}
+
+function getQuestionBonusMultiplier() {
+  const remainingMs = Math.max(0, activeQuizDeadlineMs - Date.now());
+  const remainingRatio = Math.min(Math.max(remainingMs / (QUESTION_TIME_LIMIT_SECONDS * 1000), 0), 1);
+  return 1 + remainingRatio * 0.6;
+}
+
+async function handleQuizTimeout() {
+  if (!activeQuiz || quizResolutionInFlight) {
+    return;
+  }
+
+  quizResolutionInFlight = true;
+  stopQuizTimer();
+  const collectible = activeQuiz;
+  const questionIndex = collectible.questionIndex;
+  quizFeedback.textContent = 'Time is up. The question reset, so take another shot.';
+  await recordAnswerEvent(false, collectible, questionIndex, 1);
   renderQuizQuestion();
 }
 
@@ -1525,6 +1682,7 @@ function collectCollectible(collectible) {
   collectible.collected = true;
   collectible.group.visible = false;
   activeQuiz = null;
+  stopQuizTimer();
   quizPanel.classList.add('hidden');
   quizFeedback.textContent = '';
   updateCollectionHud();
@@ -1550,7 +1708,7 @@ async function startNextOrbWave() {
     const payload = await postApi('/api/generate-topic', {
       topic: currentTopicPrompt,
       count: 6,
-      difficulty: playerProfile.difficulty,
+      difficulty: selectedTopicDifficulty,
       accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
     });
     applyGeneratedTopic(withWaveOrbIds(payload, orbWaveIndex), false);
@@ -1579,9 +1737,13 @@ function withWaveOrbIds(payload, waveIndex) {
 }
 
 function closeQuizPanel() {
+  stopQuizTimer();
   activeQuiz = null;
+  quizResolutionInFlight = false;
   quizPanel.classList.add('hidden');
   quizFeedback.textContent = '';
+  quizTimer.textContent = `${QUESTION_TIME_LIMIT_SECONDS}s`;
+  quizTimer.classList.remove('is-urgent');
 
   if (collectiblesSpawned && getCollectedCount() < TOTAL_COLLECTIBLES) {
     gameHint.textContent = `Use Radar distance. Orbs reveal inside ${formatDistance(REVEAL_DISTANCE_METERS)}; get within ${formatDistance(INTERACTION_DISTANCE_METERS)}, center, and tap.`;
@@ -1650,6 +1812,7 @@ function toggleGamePanelExpansion() {
 
 function setActiveMode(mode) {
   activeMode = mode;
+  gamePanel.dataset.mode = mode;
 
   document.querySelectorAll('.mode-panel').forEach((panel) => {
     panel.classList.toggle('hidden', panel.id !== `mode-${mode}`);
@@ -1973,14 +2136,14 @@ function updateProfilePanel() {
 
   profileSummary.textContent = collectedCount === TOTAL_COLLECTIBLES
     ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
-    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${playerProfile.difficulty} in your 3-mile area.`;
+    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your 3-mile area.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
   profileLevel.textContent = playerProfile.level;
   profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
   profileStreak.textContent = `${playerProfile.streak}x`;
   profileNearest.textContent = nearest ? `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}` : 'Cleared';
   profileRank.textContent = playerLeaderboardEntry ? `#${playerLeaderboardEntry.rank}` : '--';
-  profileDifficulty.textContent = playerProfile.difficulty;
+  profileDifficulty.textContent = selectedTopicDifficulty;
   profileTimeTotal.textContent = formatUsageDuration(usageStats.totalSeconds);
   profileTimeToday.textContent = formatUsageDuration(usageStats.todaySeconds);
   profileParentView.textContent = 'Ready';
@@ -1990,7 +2153,7 @@ function updateProfilePanel() {
 function renderLeaderboard(displayLeaderboard) {
   leaderboardList.replaceChildren();
 
-  const visibleEntries = displayLeaderboard.slice(0, 6);
+  const visibleEntries = activeMode === 'you' ? displayLeaderboard : displayLeaderboard.slice(0, 6);
   const playerEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id) || null;
   const includesPlayer = visibleEntries.some((entry) => entry.id === playerProfile.id);
 
