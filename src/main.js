@@ -859,6 +859,7 @@ function initScene() {
   renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000, 0);
   renderer.xr.enabled = true;
   renderer.domElement.className = 'xr-canvas';
   xrRoot.appendChild(renderer.domElement);
