@@ -1,12 +1,15 @@
 import './style.css';
+import 'leaflet/dist/leaflet.css';
 
+import L from 'leaflet';
 import * as THREE from 'three';
 
 const RETICLE_RADIUS = 0.16;
-const COLLECTIBLE_HEIGHT = 0.3;
+const COLLECTIBLE_HEIGHT = 0.56;
 let TOTAL_COLLECTIBLES = 6;
 const REVEAL_DISTANCE_METERS = 4;
 const INTERACTION_DISTANCE_METERS = 3;
+const MAP_RADIUS_MILES = 3;
 const QUESTION_TIME_LIMIT_SECONDS = 20;
 const DB_NAME = 'quest-ar-progress';
 const DB_VERSION = 1;
@@ -167,7 +170,8 @@ const topicDifficultySelect = document.querySelector('#topic-difficulty');
 const topicStatus = document.querySelector('#topic-status');
 const radarSummary = document.querySelector('#radar-summary');
 const radarList = document.querySelector('#radar-list');
-const radarTargets = document.querySelector('#radar-targets');
+const mapSummary = document.querySelector('#map-summary');
+const areaMapElement = document.querySelector('#area-map');
 const journalSummary = document.querySelector('#journal-summary');
 const journalList = document.querySelector('#journal-list');
 const journalDetail = document.querySelector('#journal-detail');
@@ -234,13 +238,19 @@ let playerName = getOrCreatePlayerName();
 let playerProfile = getDefaultProfile();
 let leaderboard = [];
 let manualArRetryAvailable = false;
+let areaMap = null;
+let userCoords = null;
+let userLocationMarker = null;
+let userRadiusCircle = null;
+let orbZoneLayer = null;
+let locationWatchId = null;
+let lastAreaMapRenderKey = '';
 let usageStats = getUsageStats();
 let lastUsageTickMs = Date.now();
 let activeQuizTimerId = null;
 let activeQuizDeadlineMs = 0;
 let activeQuestionBonusMultiplier = 1;
 let quizResolutionInFlight = false;
-let trackedOrbId = null;
 
 const SIMULATED_COMPETITORS = [
   { id: 'sim-lyra', name: 'Lyra', xp: 1180, bestStreak: 18, streak: 5 },
@@ -258,6 +268,7 @@ const upAxis = new THREE.Vector3(0, 1, 0);
 const orbTextureCache = new Map();
 
 initScene();
+startLocationTracking();
 startUsageTracking();
 void loadProgressState().then(() => {
   updateCollectionHud();
@@ -425,6 +436,37 @@ function updateUsageStats(shouldPersist) {
   updateModePanels();
 }
 
+function startLocationTracking() {
+  if (!('geolocation' in navigator) || locationWatchId !== null) {
+    if (!('geolocation' in navigator)) {
+      mapSummary.textContent = 'Location is unavailable on this device. The map tab needs location access for nearby orb zones.';
+    }
+    return;
+  }
+
+  mapSummary.textContent = 'Finding your local hunt area...';
+  locationWatchId = navigator.geolocation.watchPosition(
+    (position) => {
+      userCoords = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
+      updateAreaMap();
+      updateModePanels();
+    },
+    () => {
+      mapSummary.textContent = 'Enable location in Chrome to view orb zones around your real area.';
+      updateAreaMap();
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 15000,
+      timeout: 12000,
+    },
+  );
+}
+
 function updateStartButtonState() {
   if (currentSession) {
     startButton.classList.remove('hidden');
@@ -516,7 +558,6 @@ function applyGeneratedTopic(payload, resetExisting) {
   TRIVIA_COLLECTIBLES = orbs;
   TOTAL_COLLECTIBLES = orbs.length;
   selectedJournalAnimalId = orbs[0].id;
-  trackedOrbId = orbs[0].id;
   currentTopicPrompt = payload.topic || currentTopicPrompt;
   currentTopicSummary = payload.summary || currentTopicSummary;
   selectedTopicDifficulty = payload.difficulty || selectedTopicDifficulty;
@@ -859,7 +900,6 @@ function initScene() {
   renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x000000, 0);
   renderer.xr.enabled = true;
   renderer.domElement.className = 'xr-canvas';
   xrRoot.appendChild(renderer.domElement);
@@ -927,7 +967,7 @@ async function startARSession() {
     startButton.classList.remove('hidden');
     startButton.textContent = 'Starting...';
     statusText.textContent = 'Requesting camera-based AR session...';
-    renderer.xr.setReferenceSpaceType('local-floor');
+    renderer.xr.setReferenceSpaceType('local');
 
     const session = await requestARSession();
     currentSession = session;
@@ -1224,7 +1264,7 @@ function createTopicOrbModel(item) {
   const coreColor = new THREE.Color(palette.core);
   const shellColor = new THREE.Color(palette.shell);
   const glowColor = new THREE.Color(palette.glow);
-  const flameTextures = getOrbFlameTextures(palette.flameInner, palette.flameOuter);
+  const flareTexture = getOrbFlareTexture(palette.flameInner, palette.flameOuter);
   const standMetal = new THREE.MeshStandardMaterial({ color: 0xb8c3d7, metalness: 0.88, roughness: 0.28 });
   const standShadow = new THREE.MeshStandardMaterial({ color: 0x536071, metalness: 0.78, roughness: 0.44 });
   const coreMaterial = new THREE.MeshStandardMaterial({
@@ -1260,9 +1300,9 @@ function createTopicOrbModel(item) {
     opacity: 0.86,
   });
 
-  addCylinder(group, standShadow, [0, -0.19, 0], [0.22, 0.08, 0.22], 0, 0, 0);
-  addCylinder(group, standMetal, [0, -0.11, 0], [0.17, 0.1, 0.17], 0, 0, 0);
-  addCylinder(group, standMetal, [0, -0.03, 0], [0.11, 0.11, 0.11], 0, 0, 0);
+  addCylinder(group, standShadow, [0, -0.16, 0], [0.19, 0.19, 0.1], 0, 0, 0);
+  addCylinder(group, standMetal, [0, -0.07, 0], [0.13, 0.13, 0.12], 0, 0, 0);
+  addCylinder(group, standMetal, [0, 0.01, 0], [0.09, 0.09, 0.12], 0, 0, 0);
 
   const outerAura = addSphere(group, auraMaterial, [0, 0.26, 0], [0.42, 0.42, 0.42]);
   const shell = addSphere(group, coreMaterial, [0, 0.24, 0], [0.29, 0.29, 0.29]);
@@ -1278,7 +1318,7 @@ function createTopicOrbModel(item) {
 
   const flameSprites = Array.from({ length: 5 }, (_, index) => {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: flameTextures[0],
+      map: flareTexture,
       color: shellColor,
       transparent: true,
       opacity: 0.9,
@@ -1288,15 +1328,13 @@ function createTopicOrbModel(item) {
     const angle = (index / 5) * Math.PI * 2;
     sprite.position.set(Math.cos(angle) * 0.12, 0.48 + Math.sin(angle * 2) * 0.02, Math.sin(angle) * 0.12);
     sprite.scale.set(0.3, 0.38, 1);
-    sprite.userData.frames = flameTextures;
-    sprite.userData.frameIndex = 0;
     group.add(sprite);
     return sprite;
   });
 
   const sparkSprites = Array.from({ length: 6 }, (_, index) => {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: flameTextures[0],
+      map: flareTexture,
       color: glowColor,
       transparent: true,
       opacity: 0.45,
@@ -1340,48 +1378,33 @@ function getOrbPalette(category, fallbackAccent) {
   return palettes[normalizedCategory] || palettes.general;
 }
 
-function getOrbFlameTextures(innerColor, outerColor) {
+function getOrbFlareTexture(innerColor, outerColor) {
   const cacheKey = `${innerColor}-${outerColor}`;
 
   if (orbTextureCache.has(cacheKey)) {
     return orbTextureCache.get(cacheKey);
   }
 
-  const textures = [0, 1, 2].map((frame) => createOrbFlameTexture(innerColor, outerColor, frame));
-  orbTextureCache.set(cacheKey, textures);
-  return textures;
-}
-
-function createOrbFlameTexture(innerColor, outerColor, frame) {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 256;
   const context = canvas.getContext('2d');
-  const gradient = context.createRadialGradient(128, 162, 12, 128, 162, 110);
+  const gradient = context.createRadialGradient(128, 160, 10, 128, 160, 110);
   gradient.addColorStop(0, innerColor);
-  gradient.addColorStop(0.35, `${innerColor}dd`);
+  gradient.addColorStop(0.4, `${innerColor}cc`);
   gradient.addColorStop(1, `${outerColor}00`);
 
   context.clearRect(0, 0, 256, 256);
   context.fillStyle = gradient;
   context.beginPath();
-  if (frame === 0) {
-    context.moveTo(128, 16);
-    context.bezierCurveTo(218, 54, 210, 156, 128, 238);
-    context.bezierCurveTo(46, 156, 38, 54, 128, 16);
-  } else if (frame === 1) {
-    context.moveTo(120, 22);
-    context.bezierCurveTo(226, 60, 204, 150, 136, 236);
-    context.bezierCurveTo(56, 170, 34, 72, 120, 22);
-  } else {
-    context.moveTo(136, 18);
-    context.bezierCurveTo(222, 74, 196, 164, 126, 238);
-    context.bezierCurveTo(42, 150, 52, 54, 136, 18);
-  }
+  context.moveTo(128, 18);
+  context.bezierCurveTo(214, 54, 214, 148, 128, 238);
+  context.bezierCurveTo(42, 148, 42, 54, 128, 18);
   context.fill();
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  orbTextureCache.set(cacheKey, texture);
   return texture;
 }
 
@@ -1469,9 +1492,9 @@ function updateCollectibles(timeSeconds) {
       return;
     }
 
-    const bob = Math.sin(timeSeconds * 1.5 + collectible.bobOffset) * 0.032;
+    const bob = Math.sin(timeSeconds * 1.5 + collectible.bobOffset) * 0.08;
     collectible.floatRig.position.y = collectible.worldBaseY + bob;
-    collectible.orbModel.rotation.y += 0.007;
+    collectible.orbModel.rotation.y += 0.012;
     collectible.halo.rotation.z += 0.01;
     collectible.card.lookAt(cameraWorldPosition);
     collectible.hitArea.lookAt(cameraWorldPosition);
@@ -1482,13 +1505,6 @@ function updateCollectibles(timeSeconds) {
       band.rotation.y += 0.005 + index * 0.001;
     });
     orbVisuals?.flameSprites?.forEach((sprite, index) => {
-      const frames = sprite.userData.frames || [];
-      const nextFrame = frames.length ? Math.floor(timeSeconds * 14 + index) % frames.length : 0;
-      if (frames[nextFrame] && sprite.userData.frameIndex !== nextFrame) {
-        sprite.material.map = frames[nextFrame];
-        sprite.material.needsUpdate = true;
-        sprite.userData.frameIndex = nextFrame;
-      }
       const flamePulse = 1 + Math.sin(timeSeconds * 4 + collectible.bobOffset + index) * 0.12;
       sprite.scale.set(0.3 * flamePulse, 0.38 * flamePulse, 1);
       sprite.material.opacity = 0.72 + Math.sin(timeSeconds * 5 + index) * 0.16;
@@ -1665,9 +1681,6 @@ async function handleQuizTimeout() {
 function collectCollectible(collectible) {
   collectible.collected = true;
   collectible.group.visible = false;
-  if (trackedOrbId === collectible.item.id) {
-    trackedOrbId = getNearestCollectible()?.item.id || null;
-  }
   activeQuiz = null;
   stopQuizTimer();
   quizPanel.classList.add('hidden');
@@ -1808,22 +1821,27 @@ function setActiveMode(mode) {
   tabButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.mode === mode);
   });
+
+  if (mode === 'map') {
+    updateAreaMap();
+  }
 }
 
 function updateModePanels() {
   updateRadarPanel();
+  updateAreaMap();
   updateJournalPanel();
   updateProfilePanel();
   updateClosestArrow();
 }
 
 function updateClosestArrow() {
-  if (!collectiblesSpawned || activeQuiz || activeMode !== 'hunt') {
+  if (!collectiblesSpawned || activeQuiz) {
     closestArrow.classList.add('hidden');
     return;
   }
 
-  const nearest = getGuidedCollectible();
+  const nearest = getNearestCollectible();
 
   if (!nearest) {
     closestArrow.classList.add('hidden');
@@ -1842,15 +1860,14 @@ function updateRadarPanel() {
   if (!collectiblesSpawned) {
     radarSummary.textContent = 'Waiting for the floor lock so the radar can pick up signals.';
     radarList.replaceChildren();
-    radarTargets.replaceChildren();
     return;
   }
 
-  const nearest = getGuidedCollectible();
+  const nearest = getNearestCollectible();
   const direction = nearest ? getCollectibleDirection(nearest) : null;
   const angle = nearest ? getCollectibleScreenAngleDegrees(nearest) : 0;
   radarSummary.textContent = nearest
-    ? `Tracking ${nearest.item.title}: ${getGuidanceText(direction, angle)}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
+    ? `${nearest.item.title}: ${getGuidanceText(direction, angle)}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
     : 'All signals collected.';
 
   radarList.replaceChildren();
@@ -1859,7 +1876,6 @@ function updateRadarPanel() {
     const cleared = document.createElement('strong');
     cleared.textContent = 'Route cleared';
     radarList.appendChild(cleared);
-    radarTargets.replaceChildren();
     return;
   }
 
@@ -1880,101 +1896,125 @@ function updateRadarPanel() {
 
   arrowWrap.appendChild(arrow);
   radarList.append(arrowWrap, distanceLabel, targetLabel);
-  renderRadarTargets();
 }
 
-function renderRadarTargets() {
-  radarTargets.replaceChildren();
+function updateAreaMap() {
+  if (!areaMapElement) {
+    return;
+  }
 
-  getTrackableCollectibles().forEach((collectible) => {
-    const listItem = document.createElement('li');
-    const isTracked = collectible.item.id === trackedOrbId;
-    listItem.className = `radar-target ${isTracked ? 'is-tracked' : ''} ${collectible.collected ? 'is-collected' : ''}`;
-    listItem.style.setProperty('--accent', collectible.item.accent);
-    listItem.tabIndex = collectible.collected ? -1 : 0;
+  if (!areaMap && activeMode !== 'map') {
+    return;
+  }
 
-    const icon = createOrbBadgeElement(collectible.item, 'small');
-    const content = document.createElement('div');
-    content.className = 'radar-target__content';
+  if (!areaMap) {
+    areaMap = L.map(areaMapElement, {
+      zoomControl: false,
+      attributionControl: true,
+    }).setView([37.7749, -122.4194], 12);
 
-    const titleRow = document.createElement('div');
-    titleRow.className = 'radar-target__title-row';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 20,
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    }).addTo(areaMap);
 
-    const title = document.createElement('strong');
-    title.textContent = collectible.item.title;
+    orbZoneLayer = L.layerGroup().addTo(areaMap);
+  }
 
-    const state = document.createElement('span');
-    state.className = 'radar-target__state';
-    state.textContent = collectible.collected ? 'Captured' : collectible.revealed ? 'Visible' : 'Hidden';
-
-    titleRow.append(title, state);
-
-    const detail = document.createElement('span');
-    detail.textContent = collectible.collected
-      ? 'Completed'
-      : collectible.group
-        ? `${formatDistance(getCollectibleDistance(collectible))} · ${getGuidanceText(getCollectibleDirection(collectible), getCollectibleScreenAngleDegrees(collectible))}`
-        : 'Waiting for placement';
-
-    content.append(titleRow, detail);
-    listItem.append(icon, content);
-
-    if (!collectible.collected) {
-      listItem.addEventListener('click', () => selectTrackedOrb(collectible.item.id));
-      listItem.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          selectTrackedOrb(collectible.item.id);
-        }
-      });
-    }
-
-    radarTargets.appendChild(listItem);
+  window.requestAnimationFrame(() => {
+    areaMap.invalidateSize();
   });
-}
 
-function selectTrackedOrb(itemId) {
-  trackedOrbId = itemId;
-  updateModePanels();
-}
-
-function getGuidedCollectible() {
-  const tracked = trackedOrbId
-    ? collectibles.find((collectible) => collectible.item.id === trackedOrbId && !collectible.collected)
-    : null;
-
-  if (tracked) {
-    return tracked;
+  if (activeMode !== 'map') {
+    return;
   }
 
-  const nearest = getNearestCollectible();
-
-  if (nearest) {
-    trackedOrbId = nearest.item.id;
+  if (!userCoords) {
+    mapSummary.textContent = locationWatchId === null
+      ? 'Enable location to see nearby orb zones in a 3-mile radius.'
+      : 'Finding your local hunt area...';
+    return;
   }
 
-  return nearest;
-}
+  const center = [userCoords.latitude, userCoords.longitude];
+  const radiusMeters = milesToMeters(MAP_RADIUS_MILES);
+  const mapStateKey = JSON.stringify({
+    latitude: userCoords.latitude.toFixed(4),
+    longitude: userCoords.longitude.toFixed(4),
+    items: TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item) => {
+      const progress = getProgressForItem(item);
+      return [item.id, progress.collected, progress.revealed, progress.questionIndex || 0];
+    }),
+  });
 
-function getTrackableCollectibles() {
-  return TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item) => {
-    const liveCollectible = collectibles.find((entry) => entry.item.id === item.id);
-    const progress = getProgressForItem(item);
-    return liveCollectible || {
-      item,
-      collected: Boolean(progress.collected),
-      revealed: Boolean(progress.revealed),
-      questionIndex: progress.questionIndex || 0,
-      group: null,
-    };
-  }).sort((left, right) => {
-    if (left.collected !== right.collected) {
-      return left.collected ? 1 : -1;
+  if (!userLocationMarker) {
+    userLocationMarker = L.circleMarker(center, {
+      radius: 8,
+      color: '#f8fbff',
+      weight: 2,
+      fillColor: '#79f0c2',
+      fillOpacity: 1,
+    }).addTo(areaMap);
+  } else {
+    userLocationMarker.setLatLng(center);
+  }
+
+  if (!userRadiusCircle) {
+    userRadiusCircle = L.circle(center, {
+      radius: radiusMeters,
+      color: '#79f0c2',
+      weight: 1,
+      fillColor: '#79f0c2',
+      fillOpacity: 0.08,
+    }).addTo(areaMap);
+  } else {
+    userRadiusCircle.setLatLng(center);
+    userRadiusCircle.setRadius(radiusMeters);
+  }
+
+  if (lastAreaMapRenderKey !== mapStateKey) {
+    if (orbZoneLayer) {
+      orbZoneLayer.clearLayers();
     }
 
-    const leftDistance = left.group ? getCollectibleDistance(left) : Number.POSITIVE_INFINITY;
-    const rightDistance = right.group ? getCollectibleDistance(right) : Number.POSITIVE_INFINITY;
-    return leftDistance - rightDistance;
+    getOrbZoneLocations().forEach(({ item, progress, latitude, longitude, distanceMiles }) => {
+      const marker = L.circleMarker([latitude, longitude], {
+        radius: progress.collected ? 7 : 9,
+        color: item.accent,
+        weight: 2,
+        fillColor: item.accent,
+        fillOpacity: progress.collected ? 0.28 : 0.7,
+        opacity: progress.collected ? 0.5 : 1,
+      });
+      marker.bindPopup(`<strong>${item.title}</strong><br>${progress.collected ? 'Captured' : progress.revealed ? 'Seen in AR' : 'Possible orb zone'}<br>${distanceMiles.toFixed(1)} miles away`);
+      orbZoneLayer?.addLayer(marker);
+    });
+
+    areaMap.fitBounds(userRadiusCircle.getBounds().pad(0.18), { animate: false });
+    lastAreaMapRenderKey = mapStateKey;
+  }
+
+  mapSummary.textContent = `${TOTAL_COLLECTIBLES} orb zones in your local ${MAP_RADIUS_MILES}-mile hunt radius. Captured zones dim out on the map.`;
+}
+
+function getOrbZoneLocations() {
+  if (!userCoords) {
+    return [];
+  }
+
+  return TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item, index) => {
+    const progress = getProgressForItem(item);
+    const seed = seedFromString(`${currentTopicPrompt}-${item.id}-${index}`);
+    const distanceMiles = 0.35 + (seed % 240) / 100;
+    const bearingDegrees = (seed * 37) % 360;
+    const coords = offsetCoordinates(userCoords.latitude, userCoords.longitude, distanceMiles, bearingDegrees);
+    return {
+      item,
+      progress,
+      distanceMiles,
+      ...coords,
+    };
   });
 }
 
@@ -1998,11 +2038,6 @@ function updateJournalPanel() {
     listItem.tabIndex = 0;
     listItem.setAttribute('role', 'button');
     listItem.setAttribute('aria-label', `${item.title} achievement ${collected ? 'complete' : 'locked'}`);
-
-    const topRow = document.createElement('div');
-    topRow.className = 'achievement-card__top';
-
-    const orbBadge = createOrbBadgeElement(item, 'small');
 
     const badge = document.createElement('div');
     badge.className = 'achievement-card__badge';
@@ -2030,8 +2065,7 @@ function updateJournalPanel() {
     progressFill.style.width = `${progressPercent}%`;
 
     progressBar.appendChild(progressFill);
-    topRow.append(orbBadge, badge);
-    listItem.append(topRow, title, state, progressBar);
+    listItem.append(badge, title, state, progressBar);
     listItem.addEventListener('click', () => selectJournalAnimal(item.id));
     listItem.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
@@ -2043,32 +2077,6 @@ function updateJournalPanel() {
   });
 
   renderJournalDetail();
-}
-
-function createOrbBadgeElement(item, size = 'small') {
-  const palette = getOrbPalette(item.category, item.accent);
-  const badge = document.createElement('div');
-  badge.className = `orb-badge orb-badge--${size}`;
-  badge.style.setProperty('--orb-core', palette.core);
-  badge.style.setProperty('--orb-shell', palette.shell);
-  badge.style.setProperty('--orb-glow', palette.glow);
-  badge.style.setProperty('--orb-flame-inner', palette.flameInner);
-  badge.style.setProperty('--orb-flame-outer', palette.flameOuter);
-
-  const flame = document.createElement('span');
-  flame.className = 'orb-badge__flame';
-
-  const shell = document.createElement('span');
-  shell.className = 'orb-badge__shell';
-
-  const core = document.createElement('span');
-  core.className = 'orb-badge__core';
-
-  const stand = document.createElement('span');
-  stand.className = 'orb-badge__stand';
-
-  badge.append(flame, shell, core, stand);
-  return badge;
 }
 
 function selectJournalAnimal(itemId) {
@@ -2127,8 +2135,8 @@ function updateProfilePanel() {
   const playerLeaderboardEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id);
 
   profileSummary.textContent = collectedCount === TOTAL_COLLECTIBLES
-    ? `${playerProfile.name} cleared the route. Keep climbing the local area leaderboard.`
-    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your local area.`;
+    ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
+    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your 3-mile area.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
   profileLevel.textContent = playerProfile.level;
   profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
@@ -2330,6 +2338,10 @@ function getLocalAreaDistanceMiles(seedKey) {
   return 0.2 + (seed % 280) / 100;
 }
 
+function milesToMeters(miles) {
+  return miles * 1609.344;
+}
+
 function seedFromString(text) {
   let seed = 0;
 
@@ -2338,6 +2350,29 @@ function seedFromString(text) {
   }
 
   return seed;
+}
+
+function offsetCoordinates(latitude, longitude, distanceMiles, bearingDegrees) {
+  const earthRadiusMiles = 3958.8;
+  const distanceRadians = distanceMiles / earthRadiusMiles;
+  const bearingRadians = THREE.MathUtils.degToRad(bearingDegrees);
+  const latitudeRadians = THREE.MathUtils.degToRad(latitude);
+  const longitudeRadians = THREE.MathUtils.degToRad(longitude);
+
+  const nextLatitude = Math.asin(
+    Math.sin(latitudeRadians) * Math.cos(distanceRadians)
+      + Math.cos(latitudeRadians) * Math.sin(distanceRadians) * Math.cos(bearingRadians),
+  );
+
+  const nextLongitude = longitudeRadians + Math.atan2(
+    Math.sin(bearingRadians) * Math.sin(distanceRadians) * Math.cos(latitudeRadians),
+    Math.cos(distanceRadians) - Math.sin(latitudeRadians) * Math.sin(nextLatitude),
+  );
+
+  return {
+    latitude: THREE.MathUtils.radToDeg(nextLatitude),
+    longitude: THREE.MathUtils.radToDeg(nextLongitude),
+  };
 }
 
 function getCollectibleScreenAngleDegrees(collectible) {
@@ -2369,7 +2404,6 @@ function resetCollectibles() {
   collectiblesSpawned = false;
   highlightedCollectible = null;
   activeQuiz = null;
-  trackedOrbId = TRIVIA_COLLECTIBLES[0]?.id || null;
   updateCollectionHud();
   updateModePanels();
 }
@@ -2423,10 +2457,6 @@ function getNearestCollectible() {
 }
 
 function getCollectibleDistance(collectible) {
-  if (!collectible?.group) {
-    return Number.POSITIVE_INFINITY;
-  }
-
   camera.getWorldPosition(cameraWorldPosition);
   return collectible.group.position.distanceTo(cameraWorldPosition);
 }

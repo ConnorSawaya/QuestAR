@@ -634,110 +634,28 @@ h2 {
   font-size: 0.82rem;
 }
 
-.radar-target-list {
-  display: grid;
-  gap: 0.55rem;
-  margin: 0.9rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.radar-target {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+.area-map {
+  height: min(44vh, 18rem);
+  margin-top: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 0.75rem 0.85rem;
+  background: rgba(2, 5, 14, 0.9);
 }
 
-.radar-target.is-tracked {
-  border-color: color-mix(in srgb, var(--accent) 48%, rgba(255, 255, 255, 0.14));
-  background: color-mix(in srgb, var(--accent) 14%, rgba(255, 255, 255, 0.04));
+.area-map.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #040814;
 }
 
-.radar-target.is-collected {
-  opacity: 0.58;
+.area-map .leaflet-control-attribution {
+  background: rgba(5, 8, 18, 0.82);
+  color: rgba(255, 255, 255, 0.62);
 }
 
-.radar-target__content {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 0.22rem;
-}
-
-.radar-target__title-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.radar-target__state {
-  color: rgba(255, 255, 255, 0.66) !important;
-  font-size: 0.72rem !important;
-  white-space: nowrap;
-}
-
-.orb-badge {
-  position: relative;
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-}
-
-.orb-badge--small {
-  width: 2.8rem;
-  height: 3.2rem;
-}
-
-.orb-badge__flame,
-.orb-badge__shell,
-.orb-badge__core,
-.orb-badge__stand {
-  position: absolute;
-}
-
-.orb-badge__flame {
-  top: 0.05rem;
-  width: 1.9rem;
-  height: 2.25rem;
-  background: radial-gradient(circle at 50% 68%, color-mix(in srgb, var(--orb-flame-inner) 80%, white) 0%, var(--orb-flame-inner) 32%, var(--orb-flame-outer) 76%, transparent 100%);
-  clip-path: polygon(50% 0%, 72% 18%, 85% 38%, 79% 60%, 92% 82%, 66% 100%, 34% 100%, 8% 82%, 21% 60%, 15% 38%, 28% 18%);
-  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--orb-flame-outer) 70%, transparent));
-  opacity: 0.88;
-}
-
-.orb-badge__shell {
-  top: 0.65rem;
-  width: 1.55rem;
-  height: 1.55rem;
-  border: 0.08rem solid color-mix(in srgb, white 32%, var(--orb-shell));
-  border-radius: 999px;
-  background: radial-gradient(circle at 35% 28%, color-mix(in srgb, white 70%, var(--orb-core)) 0%, var(--orb-core) 28%, var(--orb-shell) 72%, color-mix(in srgb, black 14%, var(--orb-shell)) 100%);
-  box-shadow:
-    0 0 16px color-mix(in srgb, var(--orb-glow) 70%, transparent),
-    inset 0 0 16px color-mix(in srgb, white 12%, transparent);
-}
-
-.orb-badge__core {
-  top: 0.95rem;
-  width: 0.84rem;
-  height: 0.84rem;
-  border-radius: 999px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, color-mix(in srgb, white 56%, var(--orb-core)) 32%, transparent 100%);
-  opacity: 0.88;
-}
-
-.orb-badge__stand {
-  bottom: 0.05rem;
-  width: 1.38rem;
-  height: 0.56rem;
-  border-radius: 0.48rem 0.48rem 0.3rem 0.3rem;
-  background: linear-gradient(180deg, #dfe7f2 0%, #9ba8bb 52%, #6f7b8f 100%);
-  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.5);
+.area-map .leaflet-control-attribution a {
+  color: #9fd3ff;
 }
 
 .xp-toast {
@@ -779,7 +697,7 @@ h2 {
   bottom: 0;
   z-index: 4;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.55rem;
   padding: 0.8rem 0.9rem calc(0.8rem + env(safe-area-inset-bottom));
   border-top: 1px solid rgba(255, 255, 255, 0.12);
@@ -1002,13 +920,6 @@ h2 {
   font-size: 0.65rem;
   font-weight: 900;
   letter-spacing: 0.08em;
-}
-
-.achievement-card__top {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 0.5rem;
 }
 
 .achievement-card strong {
@@ -1266,24 +1177,8 @@ body.is-ar-active {
   background: transparent;
 }
 
-body.is-ar-active,
-body.is-ar-active #app,
-body.is-ar-active #xr-root {
-  background: transparent;
-}
-
-body.is-ar-active #app::before,
-body.is-ar-active #app::after {
-  display: none;
-}
-
 body.is-ar-active .panel {
   background: rgba(5, 8, 18, 0.74);
-  backdrop-filter: none;
-}
-
-body.is-ar-active .tab-bar {
-  backdrop-filter: none;
 }
 
 body.is-ar-active #app {
@@ -1378,53 +1273,33 @@ body.is-ar-active #game-panel.is-expanded {
   overflow-y: auto;
 }
 
-body.is-ar-active #game-panel[data-mode="radar"],
-body.is-ar-active #game-panel[data-mode="journal"],
 body.is-ar-active #game-panel[data-mode="you"] {
-  top: calc(4rem + env(safe-area-inset-top));
+  top: calc(0.75rem + env(safe-area-inset-top));
   bottom: calc(4.9rem + env(safe-area-inset-bottom));
   max-height: none;
   overflow: hidden;
 }
 
-body.is-ar-active #game-panel[data-mode="radar"] .hud-grip,
-body.is-ar-active #game-panel[data-mode="journal"] .hud-grip,
 body.is-ar-active #game-panel[data-mode="you"] .hud-grip {
   display: none;
 }
 
-body.is-ar-active #game-panel[data-mode="radar"] #mode-radar,
-body.is-ar-active #game-panel[data-mode="journal"] #mode-journal,
 body.is-ar-active #game-panel[data-mode="you"] #mode-you {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   height: 100%;
   min-height: 0;
-}
-
-body.is-ar-active #game-panel[data-mode="radar"] #mode-radar {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-}
-
-body.is-ar-active #game-panel[data-mode="journal"] #mode-journal {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-}
-
-body.is-ar-active #game-panel[data-mode="you"] #mode-you {
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-}
-
-body.is-ar-active #game-panel[data-mode="radar"] .radar-target-list,
-body.is-ar-active #game-panel[data-mode="journal"] #journal-list,
-body.is-ar-active #game-panel[data-mode="you"] .leaderboard-list {
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 0.1rem;
 }
 
 body.is-ar-active #game-panel[data-mode="you"] .leaderboard-card {
   display: grid;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+body.is-ar-active #game-panel[data-mode="you"] .leaderboard-list {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 body.is-ar-active .quiz-panel {
