@@ -1266,8 +1266,24 @@ body.is-ar-active {
   background: transparent;
 }
 
+body.is-ar-active,
+body.is-ar-active #app,
+body.is-ar-active #xr-root {
+  background: transparent;
+}
+
+body.is-ar-active #app::before,
+body.is-ar-active #app::after {
+  display: none;
+}
+
 body.is-ar-active .panel {
   background: rgba(5, 8, 18, 0.74);
+  backdrop-filter: none;
+}
+
+body.is-ar-active .tab-bar {
+  backdrop-filter: none;
 }
 
 body.is-ar-active #app {
