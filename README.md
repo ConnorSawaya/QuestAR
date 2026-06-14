@@ -18,8 +18,6 @@ npm install
 npm run dev
 ```
 
-`npm run dev` starts both the Vite client on `5173` and the local API server on `4173`. The Vite dev server proxies `/api/*` requests to `server.js`, so topic generation, profile XP, and leaderboard requests work from the landing page during local development.
-
 ## Build
 
 ```bash

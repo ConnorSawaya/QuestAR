@@ -859,7 +859,6 @@ function initScene() {
   renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x000000, 0);
   renderer.xr.enabled = true;
   renderer.domElement.className = 'xr-canvas';
   xrRoot.appendChild(renderer.domElement);
@@ -1277,7 +1276,7 @@ function createTopicOrbModel(item) {
   });
 
   const flameSprites = Array.from({ length: 5 }, (_, index) => {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: flameTextures[0],
       color: shellColor,
       transparent: true,
@@ -1295,7 +1294,7 @@ function createTopicOrbModel(item) {
   });
 
   const sparkSprites = Array.from({ length: 6 }, (_, index) => {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: flameTextures[0],
       color: glowColor,
       transparent: true,
@@ -1846,16 +1845,16 @@ function updateRadarPanel() {
     return;
   }
 
-  const target = getGuidedCollectible();
-  const direction = target ? getCollectibleDirection(target) : null;
-  const angle = target ? getCollectibleScreenAngleDegrees(target) : 0;
-  radarSummary.textContent = target
-    ? `Tracking ${target.item.title}: ${getGuidanceText(direction, angle)}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
+  const nearest = getGuidedCollectible();
+  const direction = nearest ? getCollectibleDirection(nearest) : null;
+  const angle = nearest ? getCollectibleScreenAngleDegrees(nearest) : 0;
+  radarSummary.textContent = nearest
+    ? `Tracking ${nearest.item.title}: ${getGuidanceText(direction, angle)}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
     : 'All signals collected.';
 
   radarList.replaceChildren();
 
-  if (!target) {
+  if (!nearest) {
     const cleared = document.createElement('strong');
     cleared.textContent = 'Route cleared';
     radarList.appendChild(cleared);
@@ -1863,7 +1862,7 @@ function updateRadarPanel() {
     return;
   }
 
-  const distance = getCollectibleDistance(target);
+  const distance = getCollectibleDistance(nearest);
   const arrowWrap = document.createElement('div');
   arrowWrap.className = 'radar-compass__bubble';
 
@@ -1876,7 +1875,7 @@ function updateRadarPanel() {
   distanceLabel.textContent = `${formatDistance(distance)} away`;
 
   const targetLabel = document.createElement('span');
-  targetLabel.textContent = `${target.item.title} · ${getGuidanceText(direction, angle)}`;
+  targetLabel.textContent = `${nearest.item.title} · ${getGuidanceText(direction, angle)}`;
 
   arrowWrap.appendChild(arrow);
   radarList.append(arrowWrap, distanceLabel, targetLabel);
@@ -1905,11 +1904,7 @@ function renderRadarTargets() {
 
     const state = document.createElement('span');
     state.className = 'radar-target__state';
-    state.textContent = collectible.collected
-      ? 'Captured'
-      : collectible.revealed
-        ? 'Visible'
-        : 'Hidden';
+    state.textContent = collectible.collected ? 'Captured' : collectible.revealed ? 'Visible' : 'Hidden';
 
     titleRow.append(title, state);
 
@@ -1943,7 +1938,9 @@ function selectTrackedOrb(itemId) {
 }
 
 function getGuidedCollectible() {
-  const tracked = trackedOrbId ? collectibles.find((collectible) => collectible.item.id === trackedOrbId && !collectible.collected) : null;
+  const tracked = trackedOrbId
+    ? collectibles.find((collectible) => collectible.item.id === trackedOrbId && !collectible.collected)
+    : null;
 
   if (tracked) {
     return tracked;
@@ -2129,8 +2126,8 @@ function updateProfilePanel() {
   const playerLeaderboardEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id);
 
   profileSummary.textContent = collectedCount === TOTAL_COLLECTIBLES
-    ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
-    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your 3-mile area.`;
+    ? `${playerProfile.name} cleared the route. Keep climbing the local area leaderboard.`
+    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your local area.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
   profileLevel.textContent = playerProfile.level;
   profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
