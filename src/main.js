@@ -1,5 +1,7 @@
 import './style.css';
+import 'leaflet/dist/leaflet.css';
 
+import L from 'leaflet';
 import * as THREE from 'three';
 
 const RETICLE_RADIUS = 0.16;
@@ -7,12 +9,14 @@ const COLLECTIBLE_HEIGHT = 0.56;
 let TOTAL_COLLECTIBLES = 6;
 const REVEAL_DISTANCE_METERS = 4;
 const INTERACTION_DISTANCE_METERS = 3;
+const MAP_RADIUS_MILES = 3;
 const DB_NAME = 'quest-ar-progress';
 const DB_VERSION = 1;
 const PROGRESS_STORE = 'animalProgress';
 const PLAYER_ID_KEY = 'quest-ar-player-id';
 const PLAYER_NAME_KEY = 'quest-ar-player-name';
 const LOCAL_PROFILE_KEY = 'quest-ar-local-profile';
+const USAGE_STATS_KEY = 'quest-ar-usage-stats';
 
 let TRIVIA_COLLECTIBLES = [
   {
@@ -164,6 +168,8 @@ const topicGenerate = document.querySelector('#topic-generate');
 const topicStatus = document.querySelector('#topic-status');
 const radarSummary = document.querySelector('#radar-summary');
 const radarList = document.querySelector('#radar-list');
+const mapSummary = document.querySelector('#map-summary');
+const areaMapElement = document.querySelector('#area-map');
 const journalSummary = document.querySelector('#journal-summary');
 const journalList = document.querySelector('#journal-list');
 const journalDetail = document.querySelector('#journal-detail');
@@ -175,6 +181,9 @@ const profileStreak = document.querySelector('#profile-streak');
 const profileNearest = document.querySelector('#profile-nearest');
 const profileRank = document.querySelector('#profile-rank');
 const profileDifficulty = document.querySelector('#profile-difficulty');
+const profileTimeTotal = document.querySelector('#profile-time-total');
+const profileTimeToday = document.querySelector('#profile-time-today');
+const profileParentView = document.querySelector('#profile-parent-view');
 const leaderboardList = document.querySelector('#leaderboard-list');
 const regenerateTopic = document.querySelector('#regenerate-topic');
 const tabBar = document.querySelector('#tab-bar');
@@ -224,6 +233,24 @@ let playerId = getOrCreatePlayerId();
 let playerName = getOrCreatePlayerName();
 let playerProfile = getDefaultProfile();
 let leaderboard = [];
+let manualArRetryAvailable = false;
+let areaMap = null;
+let userCoords = null;
+let userLocationMarker = null;
+let userRadiusCircle = null;
+let orbZoneLayer = null;
+let locationWatchId = null;
+let lastAreaMapRenderKey = '';
+let usageStats = getUsageStats();
+let lastUsageTickMs = Date.now();
+
+const SIMULATED_COMPETITORS = [
+  { id: 'sim-lyra', name: 'Lyra', xp: 1180, bestStreak: 18, streak: 5 },
+  { id: 'sim-kai', name: 'Kai', xp: 940, bestStreak: 15, streak: 4 },
+  { id: 'sim-mira', name: 'Mira', xp: 710, bestStreak: 12, streak: 3 },
+  { id: 'sim-soren', name: 'Soren', xp: 520, bestStreak: 9, streak: 2 },
+  { id: 'sim-juno', name: 'Juno', xp: 320, bestStreak: 6, streak: 1 },
+];
 
 const selectionRaycaster = new THREE.Raycaster();
 const selectionOrigin = new THREE.Vector3();
@@ -232,6 +259,8 @@ const cameraWorldPosition = new THREE.Vector3();
 const upAxis = new THREE.Vector3(0, 1, 0);
 
 initScene();
+startLocationTracking();
+startUsageTracking();
 void loadProgressState().then(() => {
   updateCollectionHud();
   updateModePanels();
@@ -250,6 +279,8 @@ startButton.addEventListener('click', handleStartButtonInteraction);
 quizClose.addEventListener('click', closeQuizPanel);
 topicForm.addEventListener('submit', handleTopicSubmit);
 regenerateTopic.addEventListener('click', openTopicRegenerator);
+document.addEventListener('visibilitychange', handleVisibilityUsageSync);
+window.addEventListener('beforeunload', persistUsageTick);
 
 function openProgressDb() {
   return new Promise((resolve, reject) => {
@@ -321,12 +352,127 @@ function transactionToPromise(transaction) {
   });
 }
 
+function getUsageStats() {
+  const saved = localStorage.getItem(USAGE_STATS_KEY);
+
+  if (saved) {
+    try {
+      return normalizeUsageStats(JSON.parse(saved));
+    } catch {
+      localStorage.removeItem(USAGE_STATS_KEY);
+    }
+  }
+
+  return normalizeUsageStats();
+}
+
+function normalizeUsageStats(stats = {}) {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const lastDate = stats.lastDate === todayKey ? stats.lastDate : todayKey;
+
+  return {
+    totalSeconds: Math.max(0, Number(stats.totalSeconds) || 0),
+    todaySeconds: lastDate === todayKey ? Math.max(0, Number(stats.todaySeconds) || 0) : 0,
+    lastDate,
+  };
+}
+
+function startUsageTracking() {
+  updateUsageStats(false);
+  window.setInterval(() => {
+    updateUsageStats(true);
+  }, 15000);
+}
+
+function handleVisibilityUsageSync() {
+  if (document.visibilityState === 'hidden') {
+    persistUsageTick();
+    return;
+  }
+
+  lastUsageTickMs = Date.now();
+  updateUsageStats(false);
+}
+
+function persistUsageTick() {
+  updateUsageStats(true);
+}
+
+function updateUsageStats(shouldPersist) {
+  const now = Date.now();
+  const todayKey = new Date().toISOString().slice(0, 10);
+
+  if (usageStats.lastDate !== todayKey) {
+    usageStats.todaySeconds = 0;
+    usageStats.lastDate = todayKey;
+  }
+
+  if (document.visibilityState !== 'hidden') {
+    const elapsedSeconds = Math.max(0, Math.floor((now - lastUsageTickMs) / 1000));
+
+    if (elapsedSeconds > 0) {
+      usageStats.totalSeconds += elapsedSeconds;
+      usageStats.todaySeconds += elapsedSeconds;
+      shouldPersist = true;
+    }
+  }
+
+  lastUsageTickMs = now;
+
+  if (shouldPersist) {
+    localStorage.setItem(USAGE_STATS_KEY, JSON.stringify(usageStats));
+  }
+
+  updateModePanels();
+}
+
+function startLocationTracking() {
+  if (!('geolocation' in navigator) || locationWatchId !== null) {
+    if (!('geolocation' in navigator)) {
+      mapSummary.textContent = 'Location is unavailable on this device. The map tab needs location access for nearby orb zones.';
+    }
+    return;
+  }
+
+  mapSummary.textContent = 'Finding your local hunt area...';
+  locationWatchId = navigator.geolocation.watchPosition(
+    (position) => {
+      userCoords = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
+      updateAreaMap();
+      updateModePanels();
+    },
+    () => {
+      mapSummary.textContent = 'Enable location in Chrome to view orb zones around your real area.';
+      updateAreaMap();
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 15000,
+      timeout: 12000,
+    },
+  );
+}
+
 function updateStartButtonState() {
   if (currentSession) {
+    startButton.classList.remove('hidden');
     startButton.disabled = false;
     startButton.textContent = 'Exit AR';
     return;
   }
+
+  if (manualArRetryAvailable) {
+    startButton.classList.remove('hidden');
+    startButton.disabled = false;
+    startButton.textContent = 'Retry AR';
+    return;
+  }
+
+  startButton.classList.add('hidden');
 
   if (!arSupported) {
     startButton.disabled = true;
@@ -334,14 +480,8 @@ function updateStartButtonState() {
     return;
   }
 
-  if (!topicReady) {
-    startButton.disabled = true;
-    startButton.textContent = 'Generate first';
-    return;
-  }
-
-  startButton.disabled = false;
-  startButton.textContent = 'Start AR';
+  startButton.disabled = true;
+  startButton.textContent = topicReady ? 'Opening AR...' : 'Waiting for topic';
 }
 
 async function handleTopicSubmit(event) {
@@ -371,8 +511,9 @@ async function generateTopicQuest(topic, resetExisting) {
       accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
     });
     applyGeneratedTopic(payload, resetExisting);
-    topicStatus.textContent = `${payload.orbs.length} ${payload.topic} orbs ready. You can Start AR.`;
+    topicStatus.textContent = `${payload.orbs.length} ${payload.topic} orbs ready. Opening AR now...`;
     appendTopicMessage('Quest AI', payload.summary || `Generated ${payload.orbs.length} orbs.`);
+    await autoStartArForTopic();
   } catch (error) {
     topicStatus.textContent = 'Could not generate topic right now. Try again.';
     appendTopicMessage('Quest AI', `Generation failed: ${error.message}`);
@@ -704,16 +845,32 @@ function handleStartButtonInteraction(event) {
     return;
   }
 
-  if (!topicReady && !currentSession) {
-    topicStatus.textContent = 'Generate topic orbs before entering AR.';
+  if (!manualArRetryAvailable && !currentSession) {
     return;
   }
 
   startInteractionInFlight = true;
-  statusText.textContent = currentSession ? 'Closing AR session...' : 'Start button pressed. Opening AR...';
+  statusText.textContent = currentSession ? 'Closing AR session...' : 'Retrying AR...';
   void startARSession().finally(() => {
     startInteractionInFlight = false;
   });
+}
+
+async function autoStartArForTopic() {
+  if (!arSupported || currentSession || startInteractionInFlight) {
+    return;
+  }
+
+  manualArRetryAvailable = false;
+  startInteractionInFlight = true;
+  topicStatus.textContent = 'Opening AR...';
+  statusText.textContent = 'Topic ready. Opening AR...';
+
+  try {
+    await startARSession();
+  } finally {
+    startInteractionInFlight = false;
+  }
 }
 
 function initScene() {
@@ -767,8 +924,12 @@ async function checkWebXRSupport() {
     arSupported = true;
     updateStartButtonState();
 
+    if (topicReady && !currentSession) {
+      void autoStartArForTopic();
+    }
+
     if (!/GSA|; wv\)/i.test(userAgent)) {
-      statusText.textContent = 'Generate a topic quest, then Start AR and scan the floor.';
+      statusText.textContent = 'Generate a topic quest and AR will open automatically.';
     }
   } catch (error) {
     showUnsupported(`Could not check WebXR support: ${error.message}`);
@@ -782,7 +943,9 @@ async function startARSession() {
   }
 
   try {
+    manualArRetryAvailable = false;
     startButton.disabled = true;
+    startButton.classList.remove('hidden');
     startButton.textContent = 'Starting...';
     statusText.textContent = 'Requesting camera-based AR session...';
     renderer.xr.setReferenceSpaceType('local');
@@ -803,9 +966,12 @@ async function startARSession() {
     setActiveMode('hunt');
     startButton.disabled = false;
     updateStartButtonState();
+    topicStatus.textContent = 'AR active. Scan the floor to place your route.';
     statusText.textContent = 'Move your phone slowly to find the floor.';
   } catch (error) {
+    manualArRetryAvailable = true;
     updateStartButtonState();
+    topicStatus.textContent = 'AR could not open automatically. Use Retry AR.';
     statusText.textContent = `AR could not start: ${error.message}`;
   }
 }
@@ -1492,10 +1658,15 @@ function setActiveMode(mode) {
   tabButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.mode === mode);
   });
+
+  if (mode === 'map') {
+    updateAreaMap();
+  }
 }
 
 function updateModePanels() {
   updateRadarPanel();
+  updateAreaMap();
   updateJournalPanel();
   updateProfilePanel();
   updateClosestArrow();
@@ -1515,9 +1686,10 @@ function updateClosestArrow() {
   }
 
   const angle = getCollectibleScreenAngleDegrees(nearest);
+  const direction = getCollectibleDirection(nearest);
   closestArrowIcon.textContent = '↑';
   closestArrowIcon.style.transform = `rotate(${angle}deg)`;
-  closestArrowLabel.textContent = `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}`;
+  closestArrowLabel.textContent = `${getGuidanceText(direction, angle)} · ${formatDistance(getCollectibleDistance(nearest))}`;
   closestArrow.classList.remove('hidden');
 }
 
@@ -1529,8 +1701,10 @@ function updateRadarPanel() {
   }
 
   const nearest = getNearestCollectible();
+  const direction = nearest ? getCollectibleDirection(nearest) : null;
+  const angle = nearest ? getCollectibleScreenAngleDegrees(nearest) : 0;
   radarSummary.textContent = nearest
-    ? `Follow the arrow to ${nearest.item.title}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
+    ? `${nearest.item.title}: ${getGuidanceText(direction, angle)}. Visible near ${formatDistance(REVEAL_DISTANCE_METERS)}, tappable near ${formatDistance(INTERACTION_DISTANCE_METERS)}.`
     : 'All signals collected.';
 
   radarList.replaceChildren();
@@ -1543,7 +1717,6 @@ function updateRadarPanel() {
   }
 
   const distance = getCollectibleDistance(nearest);
-  const angle = getCollectibleScreenAngleDegrees(nearest);
   const arrowWrap = document.createElement('div');
   arrowWrap.className = 'radar-compass__bubble';
 
@@ -1556,18 +1729,137 @@ function updateRadarPanel() {
   distanceLabel.textContent = `${formatDistance(distance)} away`;
 
   const targetLabel = document.createElement('span');
-  targetLabel.textContent = nearest.item.title;
+  targetLabel.textContent = `${nearest.item.title} · ${getGuidanceText(direction, angle)}`;
 
   arrowWrap.appendChild(arrow);
   radarList.append(arrowWrap, distanceLabel, targetLabel);
 }
 
+function updateAreaMap() {
+  if (!areaMapElement) {
+    return;
+  }
+
+  if (!areaMap && activeMode !== 'map') {
+    return;
+  }
+
+  if (!areaMap) {
+    areaMap = L.map(areaMapElement, {
+      zoomControl: false,
+      attributionControl: true,
+    }).setView([37.7749, -122.4194], 12);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 20,
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    }).addTo(areaMap);
+
+    orbZoneLayer = L.layerGroup().addTo(areaMap);
+  }
+
+  window.requestAnimationFrame(() => {
+    areaMap.invalidateSize();
+  });
+
+  if (activeMode !== 'map') {
+    return;
+  }
+
+  if (!userCoords) {
+    mapSummary.textContent = locationWatchId === null
+      ? 'Enable location to see nearby orb zones in a 3-mile radius.'
+      : 'Finding your local hunt area...';
+    return;
+  }
+
+  const center = [userCoords.latitude, userCoords.longitude];
+  const radiusMeters = milesToMeters(MAP_RADIUS_MILES);
+  const mapStateKey = JSON.stringify({
+    latitude: userCoords.latitude.toFixed(4),
+    longitude: userCoords.longitude.toFixed(4),
+    items: TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item) => {
+      const progress = getProgressForItem(item);
+      return [item.id, progress.collected, progress.revealed, progress.questionIndex || 0];
+    }),
+  });
+
+  if (!userLocationMarker) {
+    userLocationMarker = L.circleMarker(center, {
+      radius: 8,
+      color: '#f8fbff',
+      weight: 2,
+      fillColor: '#79f0c2',
+      fillOpacity: 1,
+    }).addTo(areaMap);
+  } else {
+    userLocationMarker.setLatLng(center);
+  }
+
+  if (!userRadiusCircle) {
+    userRadiusCircle = L.circle(center, {
+      radius: radiusMeters,
+      color: '#79f0c2',
+      weight: 1,
+      fillColor: '#79f0c2',
+      fillOpacity: 0.08,
+    }).addTo(areaMap);
+  } else {
+    userRadiusCircle.setLatLng(center);
+    userRadiusCircle.setRadius(radiusMeters);
+  }
+
+  if (lastAreaMapRenderKey !== mapStateKey) {
+    if (orbZoneLayer) {
+      orbZoneLayer.clearLayers();
+    }
+
+    getOrbZoneLocations().forEach(({ item, progress, latitude, longitude, distanceMiles }) => {
+      const marker = L.circleMarker([latitude, longitude], {
+        radius: progress.collected ? 7 : 9,
+        color: item.accent,
+        weight: 2,
+        fillColor: item.accent,
+        fillOpacity: progress.collected ? 0.28 : 0.7,
+        opacity: progress.collected ? 0.5 : 1,
+      });
+      marker.bindPopup(`<strong>${item.title}</strong><br>${progress.collected ? 'Captured' : progress.revealed ? 'Seen in AR' : 'Possible orb zone'}<br>${distanceMiles.toFixed(1)} miles away`);
+      orbZoneLayer?.addLayer(marker);
+    });
+
+    areaMap.fitBounds(userRadiusCircle.getBounds().pad(0.18), { animate: false });
+    lastAreaMapRenderKey = mapStateKey;
+  }
+
+  mapSummary.textContent = `${TOTAL_COLLECTIBLES} orb zones in your local ${MAP_RADIUS_MILES}-mile hunt radius. Captured zones dim out on the map.`;
+}
+
+function getOrbZoneLocations() {
+  if (!userCoords) {
+    return [];
+  }
+
+  return TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item, index) => {
+    const progress = getProgressForItem(item);
+    const seed = seedFromString(`${currentTopicPrompt}-${item.id}-${index}`);
+    const distanceMiles = 0.35 + (seed % 240) / 100;
+    const bearingDegrees = (seed * 37) % 360;
+    const coords = offsetCoordinates(userCoords.latitude, userCoords.longitude, distanceMiles, bearingDegrees);
+    return {
+      item,
+      progress,
+      distanceMiles,
+      ...coords,
+    };
+  });
+}
+
 function updateJournalPanel() {
-  const collectedCount = getCollectedCount();
   const lifetimeCollectedCount = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).filter((item) => getProgressForItem(item).collected).length;
   journalSummary.textContent = lifetimeCollectedCount
-    ? `Achievement chart ${Math.round((lifetimeCollectedCount / TOTAL_COLLECTIBLES) * 100)}% complete. ${lifetimeCollectedCount} of ${TOTAL_COLLECTIBLES} orbs logged.`
-    : 'Tap an achievement square to inspect it. Finished orbs unlock what you learned.';
+    ? `Orb Dex ${Math.round((lifetimeCollectedCount / TOTAL_COLLECTIBLES) * 100)}% filled. ${lifetimeCollectedCount} of ${TOTAL_COLLECTIBLES} orbs captured.`
+    : 'Tap an orb slot to inspect it. Seen and captured orbs show up here.';
 
   journalList.replaceChildren();
   journalList.classList.add('achievement-grid');
@@ -1594,13 +1886,13 @@ function updateJournalPanel() {
     const state = document.createElement('span');
     state.className = 'achievement-card__state';
     if (collected) {
-      state.textContent = 'Done';
+      state.textContent = 'Captured';
     } else if (answeredCount > 0) {
-      state.textContent = `${answeredCount}/${item.questions.length} quiz`;
+      state.textContent = `Quiz ${answeredCount}/${item.questions.length}`;
     } else if (progress.revealed) {
-      state.textContent = 'Found';
+      state.textContent = 'Seen';
     } else {
-      state.textContent = 'Locked';
+      state.textContent = 'Hidden';
     }
 
     const progressBar = document.createElement('div');
@@ -1634,6 +1926,7 @@ function renderJournalDetail() {
   const progress = getProgressForItem(item);
   const collected = Boolean(progress.collected);
   const answeredCount = collected ? item.questions.length : (progress.questionIndex || 0);
+  const categoryLabel = formatCategoryLabel(item.category);
   journalDetail.replaceChildren();
   journalDetail.style.setProperty('--accent', item.accent);
 
@@ -1642,14 +1935,14 @@ function renderJournalDetail() {
 
   const meta = document.createElement('p');
   meta.className = 'journal-detail__meta';
-  meta.textContent = `${item.rarity} - ${item.trait}`;
+  meta.textContent = `${categoryLabel} orb · ${item.trait}`;
 
   const note = document.createElement('p');
   note.textContent = collected
     ? item.journalNote
     : progress.revealed
-      ? `Found, but not finished. Complete ${item.questions.length - answeredCount} more quiz question${item.questions.length - answeredCount === 1 ? '' : 's'} to unlock the full learning log.`
-      : 'Not found yet. Use Radar, walk close, and reveal this orb in AR.';
+      ? `Seen in AR, but not captured yet. Complete ${item.questions.length - answeredCount} more quiz question${item.questions.length - answeredCount === 1 ? '' : 's'} to finish this orb.`
+      : 'Not seen yet. Use Radar, walk closer, and reveal this orb in AR.';
 
   journalDetail.append(title, meta, note);
 
@@ -1658,7 +1951,7 @@ function renderJournalDetail() {
   }
 
   const learnedTitle = document.createElement('strong');
-  learnedTitle.textContent = 'What you learned';
+  learnedTitle.textContent = 'Unlocked facts';
 
   const learnedList = document.createElement('ul');
   learnedList.className = 'learned-list';
@@ -1675,11 +1968,12 @@ function renderJournalDetail() {
 function updateProfilePanel() {
   const collectedCount = getCollectedCount();
   const nearest = getNearestCollectible();
-  const playerLeaderboardEntry = leaderboard.find((entry) => entry.id === playerProfile.id);
+  const displayLeaderboard = getDisplayLeaderboard();
+  const playerLeaderboardEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id);
 
   profileSummary.textContent = collectedCount === TOTAL_COLLECTIBLES
-    ? `${playerProfile.name} cleared the route. Keep leveling on the leaderboard.`
-    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${playerProfile.difficulty}.`;
+    ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
+    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${playerProfile.difficulty} in your 3-mile area.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
   profileLevel.textContent = playerProfile.level;
   profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
@@ -1687,32 +1981,104 @@ function updateProfilePanel() {
   profileNearest.textContent = nearest ? `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}` : 'Cleared';
   profileRank.textContent = playerLeaderboardEntry ? `#${playerLeaderboardEntry.rank}` : '--';
   profileDifficulty.textContent = playerProfile.difficulty;
-  renderLeaderboard();
+  profileTimeTotal.textContent = formatUsageDuration(usageStats.totalSeconds);
+  profileTimeToday.textContent = formatUsageDuration(usageStats.todaySeconds);
+  profileParentView.textContent = 'Ready';
+  renderLeaderboard(displayLeaderboard);
 }
 
-function renderLeaderboard() {
+function renderLeaderboard(displayLeaderboard) {
   leaderboardList.replaceChildren();
 
-  if (!leaderboard.length) {
-    const empty = document.createElement('li');
-    empty.textContent = 'No scores yet.';
-    leaderboardList.appendChild(empty);
-    return;
-  }
+  const visibleEntries = displayLeaderboard.slice(0, 6);
+  const playerEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id) || null;
+  const includesPlayer = visibleEntries.some((entry) => entry.id === playerProfile.id);
 
-  leaderboard.slice(0, 5).forEach((entry) => {
+  visibleEntries.forEach((entry) => {
     const item = document.createElement('li');
     item.classList.toggle('is-you', entry.id === playerProfile.id);
+    item.classList.toggle('is-simulated', Boolean(entry.isSimulated));
+
+    const identity = document.createElement('div');
+    identity.className = 'leaderboard-list__identity';
 
     const name = document.createElement('strong');
     name.textContent = `${entry.rank}. ${entry.name}`;
 
-    const score = document.createElement('span');
-    score.textContent = `Lv ${entry.level} - ${entry.xp} XP - ${entry.bestStreak}x best`;
+    if (entry.id === playerProfile.id) {
+      const youTag = document.createElement('span');
+      youTag.className = 'leaderboard-list__tag';
+      youTag.textContent = 'YOU';
+      identity.append(name, youTag);
+    } else {
+      identity.appendChild(name);
+    }
 
-    item.append(name, score);
+    const score = document.createElement('span');
+    score.textContent = entry.id === playerProfile.id
+      ? `Lv ${entry.level} - ${entry.xp} XP - ${entry.bestStreak}x best`
+      : `Lv ${entry.level} - ${entry.xp} XP - ${entry.distanceMiles.toFixed(1)} mi away`;
+
+    item.append(identity, score);
     leaderboardList.appendChild(item);
   });
+
+  if (!includesPlayer && playerEntry) {
+    const gap = document.createElement('li');
+    gap.className = 'leaderboard-list__gap';
+    gap.textContent = '...';
+    leaderboardList.appendChild(gap);
+
+    const item = document.createElement('li');
+    item.className = 'is-you';
+
+    const identity = document.createElement('div');
+    identity.className = 'leaderboard-list__identity';
+
+    const name = document.createElement('strong');
+    name.textContent = `${playerEntry.rank}. ${playerEntry.name}`;
+
+    const youTag = document.createElement('span');
+    youTag.className = 'leaderboard-list__tag';
+    youTag.textContent = 'YOU';
+    identity.append(name, youTag);
+
+    const score = document.createElement('span');
+    score.textContent = `Lv ${playerEntry.level} - ${playerEntry.xp} XP - ${playerEntry.bestStreak}x best`;
+
+    item.append(identity, score);
+    leaderboardList.appendChild(item);
+  }
+}
+
+function getDisplayLeaderboard() {
+  const merged = new Map();
+
+  SIMULATED_COMPETITORS.forEach((entry) => {
+    merged.set(entry.id, decorateClientProfile({
+      answersCorrect: 0,
+      answersTotal: 0,
+      animalCount: 0,
+      difficulty: null,
+      ...entry,
+      distanceMiles: getLocalAreaDistanceMiles(entry.id),
+      isSimulated: true,
+    }));
+  });
+
+  merged.set(playerProfile.id, decorateClientProfile({
+    ...playerProfile,
+    distanceMiles: 0,
+    name: playerName,
+    isSimulated: false,
+  }));
+
+  return Array.from(merged.values())
+    .sort((a, b) => b.xp - a.xp || b.bestStreak - a.bestStreak || a.name.localeCompare(b.name))
+    .map((entry, index) => ({
+      ...entry,
+      rank: index + 1,
+    }));
 }
 
 function getCollectedCount() {
@@ -1745,6 +2111,20 @@ function formatDistance(distanceMeters) {
   return `${Math.max(distanceMeters, 0).toFixed(1)}m`;
 }
 
+function formatUsageDuration(totalSeconds) {
+  if (totalSeconds <= 0) {
+    return '0m';
+  }
+
+  if (totalSeconds < 3600) {
+    return `${Math.max(1, Math.round(totalSeconds / 60))}m`;
+  }
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.round((totalSeconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
 function getDirectionArrow(direction) {
   if (direction === 'Left') {
     return '←';
@@ -1759,6 +2139,77 @@ function getDirectionArrow(direction) {
   }
 
   return '↑';
+}
+
+function getGuidanceText(direction, angle) {
+  const absoluteAngle = Math.abs(angle);
+
+  if (direction === 'Behind' || absoluteAngle > 135) {
+    return 'Turn around';
+  }
+
+  if (absoluteAngle < 12) {
+    return 'Straight ahead';
+  }
+
+  if (direction === 'Left') {
+    return absoluteAngle > 60 ? 'Sharp left' : 'Turn left';
+  }
+
+  if (direction === 'Right') {
+    return absoluteAngle > 60 ? 'Sharp right' : 'Turn right';
+  }
+
+  return 'Straight ahead';
+}
+
+function formatCategoryLabel(category) {
+  return String(category || 'general')
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function getLocalAreaDistanceMiles(seedKey) {
+  const seed = seedFromString(`leaderboard-${seedKey}`);
+  return 0.2 + (seed % 280) / 100;
+}
+
+function milesToMeters(miles) {
+  return miles * 1609.344;
+}
+
+function seedFromString(text) {
+  let seed = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    seed = (seed * 31 + text.charCodeAt(index)) >>> 0;
+  }
+
+  return seed;
+}
+
+function offsetCoordinates(latitude, longitude, distanceMiles, bearingDegrees) {
+  const earthRadiusMiles = 3958.8;
+  const distanceRadians = distanceMiles / earthRadiusMiles;
+  const bearingRadians = THREE.MathUtils.degToRad(bearingDegrees);
+  const latitudeRadians = THREE.MathUtils.degToRad(latitude);
+  const longitudeRadians = THREE.MathUtils.degToRad(longitude);
+
+  const nextLatitude = Math.asin(
+    Math.sin(latitudeRadians) * Math.cos(distanceRadians)
+      + Math.cos(latitudeRadians) * Math.sin(distanceRadians) * Math.cos(bearingRadians),
+  );
+
+  const nextLongitude = longitudeRadians + Math.atan2(
+    Math.sin(bearingRadians) * Math.sin(distanceRadians) * Math.cos(latitudeRadians),
+    Math.cos(distanceRadians) - Math.sin(latitudeRadians) * Math.sin(nextLatitude),
+  );
+
+  return {
+    latitude: THREE.MathUtils.radToDeg(nextLatitude),
+    longitude: THREE.MathUtils.radToDeg(nextLongitude),
+  };
 }
 
 function getCollectibleScreenAngleDegrees(collectible) {
@@ -1779,7 +2230,7 @@ function getCollectibleScreenAngleDegrees(collectible) {
   }
 
   toCollectible.normalize();
-  const right = new THREE.Vector3().crossVectors(forward, upAxis).normalize().negate();
+  const right = new THREE.Vector3().crossVectors(forward, upAxis).normalize();
   const angleRadians = Math.atan2(right.dot(toCollectible), forward.dot(toCollectible));
   return THREE.MathUtils.radToDeg(angleRadians);
 }
@@ -1865,7 +2316,7 @@ function getCollectibleDirection(collectible) {
   }
 
   toCollectible.normalize();
-  const right = new THREE.Vector3().crossVectors(forward, upAxis).normalize().negate();
+  const right = new THREE.Vector3().crossVectors(forward, upAxis).normalize();
   const forwardDot = forward.dot(toCollectible);
   const rightDot = right.dot(toCollectible);
 

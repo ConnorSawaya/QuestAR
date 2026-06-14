@@ -34,11 +34,11 @@
           <div class="landing-actions">
             <div>
               <p class="eyebrow">Mission</p>
-              <h2>Generate your AR quiz</h2>
-              <p class="landing-brief">Tell the AI what you want to learn, then enter AR after your topic orbs are ready.</p>
+              <h2>Type a topic and launch AR</h2>
+              <p class="landing-brief">Tell the AI what you want to learn and Quest AR will open the hunt as soon as your topic orbs are ready.</p>
             </div>
 
-            <button id="start-ar" class="button button--small" type="button" disabled>
+            <button id="start-ar" class="button button--small hidden" type="button" disabled>
               Checking AR...
             </button>
           </div>
@@ -49,7 +49,7 @@
             <label class="topic-input-label" for="topic-input">Topic prompt</label>
             <textarea id="topic-input" rows="3" placeholder="Example: Make a harder quest about acids and bases for a chemistry test"></textarea>
             <button id="topic-generate" class="button button--secondary" type="submit">Generate Topic Orbs</button>
-            <p id="topic-status" class="status">Generate questions first, then Start AR.</p>
+            <p id="topic-status" class="status">Generate questions to launch AR automatically.</p>
           </form>
         </div>
 
@@ -81,9 +81,16 @@
           <div id="radar-list" class="radar-compass" aria-label="Closest orb direction"></div>
         </section>
 
+        <section id="mode-map" class="mode-panel hidden" aria-label="Map mode panel">
+          <p class="eyebrow">Map</p>
+          <h2>Local Hunt Zone</h2>
+          <p id="map-summary">Enable location to see nearby orb zones in a 3-mile radius.</p>
+          <div id="area-map" class="area-map" aria-label="Local hunt area map"></div>
+        </section>
+
         <section id="mode-journal" class="mode-panel hidden" aria-label="Journal mode panel">
           <p class="eyebrow">Journal</p>
-          <h2>Your Collection Log</h2>
+          <h2>Orb Dex</h2>
           <p id="journal-summary">Every orb you complete gets logged here.</p>
           <ul id="journal-list" class="game-list" aria-label="Collection journal list"></ul>
           <div id="journal-detail" class="journal-detail" aria-live="polite"></div>
@@ -121,10 +128,29 @@
           </div>
           <div class="leaderboard-card">
             <div class="leaderboard-card__header">
-              <strong>Global Leaderboard</strong>
+              <strong>Area Leaderboard</strong>
               <span id="profile-difficulty">Easy</span>
             </div>
             <ol id="leaderboard-list" class="leaderboard-list"></ol>
+          </div>
+          <div class="activity-card">
+            <div class="leaderboard-card__header">
+              <strong>Family Activity</strong>
+            </div>
+            <div class="stats-grid stats-grid--compact">
+              <div class="stat-card">
+                <span>Time Spent</span>
+                <strong id="profile-time-total">0m</strong>
+              </div>
+              <div class="stat-card">
+                <span>Today</span>
+                <strong id="profile-time-today">0m</strong>
+              </div>
+              <div class="stat-card">
+                <span>Parent Tracking</span>
+                <strong id="profile-parent-view">Ready</strong>
+              </div>
+            </div>
           </div>
           <button id="regenerate-topic" class="button button--secondary button--small" type="button">New Topic</button>
         </section>
@@ -133,6 +159,7 @@
       <nav id="tab-bar" class="tab-bar hidden" aria-label="AR bottom tabs">
         <button class="tab-button is-active" type="button" data-mode="hunt">Hunt</button>
         <button class="tab-button" type="button" data-mode="radar">Radar</button>
+        <button class="tab-button" type="button" data-mode="map">Map</button>
         <button class="tab-button" type="button" data-mode="journal">Journal</button>
         <button class="tab-button" type="button" data-mode="you">You</button>
       </nav>
