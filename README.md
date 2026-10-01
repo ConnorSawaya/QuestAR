@@ -9,7 +9,7 @@ Orb achievement progress is saved in the browser with IndexedDB. XP, answer stre
 The server uses:
 
 1. PostgreSQL when `DATABASE_URL` exists, which is the recommended Railway setup.
-2. A local `.data/quest-ar-db.json` file when `DATABASE_URL` is not set, which is useful for local testing.
+2. A local `.data/quest-ar-db.json` file when `DATABASE_URL` is not set in development, which is useful for local testing. The server refuses to start in production without PostgreSQL because Railway's filesystem is ephemeral.
 
 ## Run Locally
 
@@ -22,6 +22,7 @@ npm run dev
 
 ```bash
 npm run build
+npm test
 ```
 
 ## Serve Built App
@@ -58,6 +59,12 @@ npm start
 
 Add a Railway PostgreSQL database to the project so Railway provides `DATABASE_URL`. The app will create its `players` table automatically on startup.
 
+Set `NODE_ENV=production` and `TRUST_PROXY_HEADERS=true` on the app service. Railway sets `X-Real-IP`; enabling proxy-header trust lets API limits apply per visitor instead of sharing a single limit across the service. Do not enable this setting on a server that is directly reachable by untrusted clients.
+
+The API enforces request-body limits and per-IP limits: 60 profile and leaderboard reads, 30 answers, 15 collections, and 6 topic generations per minute. The topic-generation limit helps contain NVIDIA usage. Limits are held in process memory, so keep one app replica unless you add a shared rate-limit store or edge limits. The public leaderboard is a casual game feature; clients can still fabricate answers, so do not use its scores as verified identity or achievement records.
+
+The per-player collection list is capped at 250 entries to bound database growth. Repeated collection IDs do not award additional XP.
+
 Optional Railway environment variables:
 
 ```text
@@ -66,7 +73,15 @@ NIM_MODEL=google/gemma-2-27b-it
 DATABASE_SSL=true
 ```
 
-Without `DATABASE_URL`, the server still works using the local JSON database fallback, but that is not recommended for production leaderboards.
+`DATABASE_URL` is required in production. The local JSON fallback is development-only and can lose writes if several local requests update the file at once.
+
+The server accepts Node.js `^20.19.0 || >=22.12.0` (matching Vite 8) and the start flow is `npm ci`, `npm run build`, `npm start`. A production deploy without the Railway PostgreSQL reference will fail at startup instead of silently losing leaderboard data.
+
+Run the server and API checks with:
+
+```bash
+npm test
+```
 
 ## Test On Android Chrome
 

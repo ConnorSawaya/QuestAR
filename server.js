@@ -2,13 +2,26 @@ import 'dotenv/config';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { dirname, extname, join, normalize } from 'node:path';
+import { isIP } from 'node:net';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import pg from 'pg';
 
 const port = Number(process.env.PORT || 4173);
 const distDir = join(process.cwd(), 'dist');
 const localDbPath = join(process.cwd(), '.data', 'quest-ar-db.json');
 const { Pool } = pg;
+const MAX_API_BODY_BYTES = 16_384;
+const MAX_RATE_LIMIT_BUCKETS = 10_000;
+const MAX_COLLECTIONS_PER_PLAYER = 250;
+const rateLimitBuckets = new Map();
+
+const apiRateLimits = {
+  'GET /api/profile': { limit: 60, windowMs: 60_000 },
+  'GET /api/leaderboard': { limit: 60, windowMs: 60_000 },
+  'POST /api/answer': { limit: 30, windowMs: 60_000 },
+  'POST /api/collect': { limit: 15, windowMs: 60_000 },
+  'POST /api/generate-topic': { limit: 6, windowMs: 60_000 },
+};
 
 const postgresPool = process.env.DATABASE_URL
   ? new Pool({
@@ -16,6 +29,10 @@ const postgresPool = process.env.DATABASE_URL
       ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false },
     })
   : null;
+
+if (process.env.NODE_ENV === 'production' && !postgresPool) {
+  throw new Error('DATABASE_URL is required in production; local JSON storage is not persistent on Railway.');
+}
 
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -27,7 +44,7 @@ const mimeTypes = {
 
 await initializeDatabase();
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
@@ -38,15 +55,22 @@ createServer(async (request, response) => {
 
     serveStaticFile(url, response);
   } catch (error) {
-    console.error(error);
-    sendJson(response, 500, { error: 'Server error' });
+    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    if (statusCode >= 500) console.error(error);
+    sendJson(response, statusCode, { error: statusCode >= 500 ? 'Server error' : error.message });
   }
-}).listen(port, '0.0.0.0', () => {
+});
+
+server.headersTimeout = 10_000;
+server.requestTimeout = 30_000;
+server.listen(port, '0.0.0.0', () => {
   console.log(`Quest AR server running on port ${port}`);
   console.log(postgresPool ? 'Database: PostgreSQL' : 'Database: local JSON file');
 });
 
 async function handleApiRequest(request, response, url) {
+  if (!consumeRateLimit(request, response)) return;
+
   if (request.method === 'GET' && url.pathname === '/api/profile') {
     const playerId = sanitizePlayerId(url.searchParams.get('playerId'));
     const name = sanitizeName(url.searchParams.get('name'));
@@ -65,19 +89,32 @@ async function handleApiRequest(request, response, url) {
     const body = await readJsonBody(request);
     const playerId = sanitizePlayerId(body.playerId);
     const name = sanitizeName(body.name);
+    const animalId = sanitizeAnimalId(body.animalId);
+    const questionIndex = Number(body.questionIndex);
+    const bonusMultiplier = body.bonusMultiplier === undefined ? 1 : Number(body.bonusMultiplier);
 
     if (!playerId) {
-      sendJson(response, 400, { error: 'playerId is required' });
+      sendJson(response, 400, { error: 'playerId must be 8-80 letters, numbers, underscores, or hyphens' });
+      return;
+    }
+
+    if (!animalId || !Number.isInteger(questionIndex) || questionIndex < 0 || questionIndex > 2 || typeof body.correct !== 'boolean') {
+      sendJson(response, 400, { error: 'answer payload is invalid' });
+      return;
+    }
+
+    if (!Number.isFinite(bonusMultiplier) || bonusMultiplier < 1 || bonusMultiplier > 1.6) {
+      sendJson(response, 400, { error: 'bonusMultiplier must be between 1 and 1.6' });
       return;
     }
 
     const result = await recordAnswer({
       playerId,
       name,
-      animalId: String(body.animalId || ''),
-      questionIndex: Number(body.questionIndex || 0),
-      correct: Boolean(body.correct),
-      bonusMultiplier: Number(body.bonusMultiplier || 1),
+      animalId,
+      questionIndex,
+      correct: body.correct,
+      bonusMultiplier,
     });
 
     sendJson(response, 200, { ...result, leaderboard: await getLeaderboard() });
@@ -88,16 +125,22 @@ async function handleApiRequest(request, response, url) {
     const body = await readJsonBody(request);
     const playerId = sanitizePlayerId(body.playerId);
     const name = sanitizeName(body.name);
+    const animalId = sanitizeAnimalId(body.animalId);
 
     if (!playerId) {
-      sendJson(response, 400, { error: 'playerId is required' });
+      sendJson(response, 400, { error: 'playerId must be 8-80 letters, numbers, underscores, or hyphens' });
+      return;
+    }
+
+    if (!animalId) {
+      sendJson(response, 400, { error: 'animalId is invalid' });
       return;
     }
 
     const result = await recordCollection({
       playerId,
       name,
-      animalId: String(body.animalId || ''),
+      animalId,
     });
 
     sendJson(response, 200, { ...result, leaderboard: await getLeaderboard() });
@@ -113,11 +156,21 @@ async function handleApiRequest(request, response, url) {
     const body = await readJsonBody(request);
     const topic = sanitizeTopic(body.topic);
     const difficulty = sanitizeDifficulty(body.difficulty);
-    const count = Math.min(Math.max(Number(body.count || 6), 4), 10);
-    const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : 0.7;
+    const count = body.count === undefined ? 6 : Number(body.count);
+    const accuracy = body.accuracy === undefined ? 0.7 : Number(body.accuracy);
 
     if (!topic) {
-      sendJson(response, 400, { error: 'topic is required' });
+      sendJson(response, 400, { error: 'topic must contain 1-140 characters' });
+      return;
+    }
+
+    if (!Number.isInteger(count) || count < 4 || count > 10) {
+      sendJson(response, 400, { error: 'count must be an integer between 4 and 10' });
+      return;
+    }
+
+    if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > 1) {
+      sendJson(response, 400, { error: 'accuracy must be between 0 and 1' });
       return;
     }
 
@@ -127,6 +180,46 @@ async function handleApiRequest(request, response, url) {
   }
 
   sendJson(response, 404, { error: 'Not found' });
+}
+
+function consumeRateLimit(request, response) {
+  const policy = apiRateLimits[`${request.method} ${new URL(request.url || '/', 'http://localhost').pathname}`];
+  if (!policy) return true;
+
+  const now = Date.now();
+  const key = `${getClientIp(request)}:${request.method}:${new URL(request.url || '/', 'http://localhost').pathname}`;
+  let bucket = rateLimitBuckets.get(key);
+
+  if (!bucket || now - bucket.startedAt >= policy.windowMs) {
+    if (!bucket && rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
+      for (const [existingKey, existingBucket] of rateLimitBuckets) {
+        if (now - existingBucket.startedAt >= existingBucket.windowMs) rateLimitBuckets.delete(existingKey);
+      }
+    }
+
+    if (!bucket && rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
+      sendJson(response, 503, { error: 'Request limiter is at capacity. Retry shortly.' }, { 'Retry-After': '60' });
+      return false;
+    }
+
+    bucket = { startedAt: now, count: 0, windowMs: policy.windowMs };
+    rateLimitBuckets.set(key, bucket);
+  }
+
+  bucket.count += 1;
+  if (bucket.count <= policy.limit) return true;
+
+  const retryAfterSeconds = Math.max(1, Math.ceil((bucket.startedAt + policy.windowMs - now) / 1000));
+  sendJson(response, 429, { error: 'Too many requests. Retry shortly.' }, { 'Retry-After': String(retryAfterSeconds) });
+  return false;
+}
+
+function getClientIp(request) {
+  const remoteAddress = request.socket.remoteAddress || 'unknown';
+  if (process.env.TRUST_PROXY_HEADERS !== 'true') return remoteAddress;
+
+  const forwardedIp = request.headers['x-real-ip'];
+  return typeof forwardedIp === 'string' && isIP(forwardedIp) ? forwardedIp : remoteAddress;
 }
 
 async function initializeDatabase() {
@@ -276,6 +369,11 @@ async function recordCollection({ playerId, name, animalId }) {
   const profile = await ensureProfile(playerId, name);
   const previousLevel = getLevelForXp(profile.xp);
   const alreadyCollected = Boolean(profile.animalsCollected?.[animalId]);
+  if (!alreadyCollected && Object.keys(profile.animalsCollected || {}).length >= MAX_COLLECTIONS_PER_PLAYER) {
+    const error = new Error('This profile has reached its collection limit.');
+    error.statusCode = 409;
+    throw error;
+  }
   const xpGained = alreadyCollected ? 0 : getCollectionXp(profile.level);
 
   profile.animalsCollected = {
@@ -417,6 +515,7 @@ async function generateTopicOrbs({ topic, difficulty, count, accuracy }) {
   try {
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
       headers: {
         Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
         'Content-Type': 'application/json',
@@ -677,7 +776,8 @@ function normalizeCategory(value) {
 }
 
 function sanitizeTopic(value) {
-  return String(value || '').replace(/[<>]/g, '').trim().slice(0, 140);
+  const topic = String(value || '').trim();
+  return topic.length > 0 && topic.length <= 140 ? topic.replace(/[<>]/g, '') : '';
 }
 
 function sanitizeDifficulty(value) {
@@ -700,7 +800,13 @@ async function writeLocalDb(db) {
 }
 
 function sanitizePlayerId(value) {
-  return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  const playerId = String(value || '');
+  return /^[a-zA-Z0-9_-]{8,80}$/.test(playerId) ? playerId : '';
+}
+
+function sanitizeAnimalId(value) {
+  const animalId = String(value || '');
+  return /^[a-zA-Z0-9_-]{1,80}$/.test(animalId) ? animalId : '';
 }
 
 function sanitizeName(value) {
@@ -709,33 +815,81 @@ function sanitizeName(value) {
 
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
-    let body = '';
-    request.on('data', (chunk) => {
-      body += chunk;
+    const chunks = [];
+    let bodySize = 0;
+    let rejected = false;
 
-      if (body.length > 32_000) {
-        request.destroy();
+    const contentType = String(request.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+    if (contentType !== 'application/json') {
+      const error = new Error('Content-Type must be application/json');
+      error.statusCode = 415;
+      reject(error);
+      request.resume();
+      return;
+    }
+
+    request.on('data', (chunk) => {
+      if (rejected) return;
+      bodySize += chunk.length;
+      if (bodySize > MAX_API_BODY_BYTES) {
+        rejected = true;
+        const error = new Error('Request body is too large');
+        error.statusCode = 413;
+        reject(error);
+        return;
       }
+      chunks.push(chunk);
     });
     request.on('end', () => {
+      if (rejected) return;
       try {
-        resolve(body ? JSON.parse(body) : {});
+        const body = Buffer.concat(chunks).toString('utf8');
+        const payload = body ? JSON.parse(body) : {};
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+          const error = new Error('Request body must be a JSON object');
+          error.statusCode = 400;
+          reject(error);
+          return;
+        }
+        resolve(payload);
       } catch (error) {
+        error.statusCode = 400;
+        error.message = 'Request body must contain valid JSON';
         reject(error);
       }
     });
-    request.on('error', reject);
+    request.on('error', (error) => {
+      if (!rejected) reject(error);
+    });
   });
 }
 
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+function sendJson(response, statusCode, payload, headers = {}) {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...headers,
+  });
   response.end(JSON.stringify(payload));
 }
 
 function serveStaticFile(url, response) {
-  const requestedPath = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '');
-  const assetPath = join(distDir, requestedPath || 'index.html');
+  let requestedPath;
+  try {
+    requestedPath = decodeURIComponent(url.pathname).replace(/^([/\\])+/, '');
+  } catch {
+    sendJson(response, 400, { error: 'Invalid path encoding' });
+    return;
+  }
+
+  const safeDistDir = resolve(distDir);
+  const assetPath = resolve(safeDistDir, requestedPath || 'index.html');
+  if (assetPath !== safeDistDir && !assetPath.startsWith(`${safeDistDir}${sep}`)) {
+    sendJson(response, 404, { error: 'Not found' });
+    return;
+  }
+
   const filePath = existsSync(assetPath) ? assetPath : join(distDir, 'index.html');
   const contentType = mimeTypes[extname(filePath)] || 'application/octet-stream';
 
