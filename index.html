@@ -34,17 +34,18 @@
           <div class="landing-actions">
             <div>
               <p class="eyebrow">Mission</p>
-              <h2>Type a topic and launch AR</h2>
-              <p class="landing-brief">Tell the AI what you want to learn and Quest AR will open the hunt as soon as your topic orbs are ready.</p>
+              <h2>Choose a topic and start a quest</h2>
+          <p class="landing-brief">Use WebXR on a supported phone, or play the local quiz demo on this device. It does not need an account or location access.</p>
             </div>
 
+            <button id="start-local-demo" class="button button--secondary button--small hidden" type="button">Play without AR</button>
             <button id="start-ar" class="button button--small hidden" type="button" disabled>
               Checking AR...
             </button>
           </div>
           <form id="topic-form" class="topic-chat" aria-label="Topic generator chat">
             <div id="topic-messages" class="topic-messages">
-              <p><strong>Quest AI:</strong> What should your AR questions be about? Try chemistry, algebra, geology, JavaScript, World War II, or any custom topic.</p>
+              <p><strong>Quest:</strong> What should your questions be about? Try chemistry, algebra, geology, JavaScript, World War II, or any custom topic.</p>
             </div>
             <label class="topic-input-label" for="topic-input">Topic prompt</label>
             <textarea id="topic-input" rows="3" placeholder="Example: Make a harder quest about acids and bases for a chemistry test"></textarea>
@@ -135,9 +136,10 @@
           </div>
           <div class="leaderboard-card">
             <div class="leaderboard-card__header">
-              <strong>Area Leaderboard</strong>
+              <strong id="leaderboard-title">Area Leaderboard</strong>
               <span id="profile-difficulty">Easy</span>
             </div>
+            <p id="leaderboard-note" class="leaderboard-note"></p>
             <ol id="leaderboard-list" class="leaderboard-list"></ol>
           </div>
           <div class="activity-card">
@@ -196,8 +198,7 @@
       <section id="unsupported" class="panel hidden" aria-label="Unsupported device message">
         <h2>Full WebXR AR is not available here</h2>
         <p>
-          This browser cannot start an immersive WebXR AR session with hit-test ground detection.
-          Use Android Chrome on a supported ARCore device for this version.
+          This browser cannot start an immersive WebXR AR session. In the static demo, use “Play without AR” to play the quizzes without camera or location access.
         </p>
       </section>
     </main>
