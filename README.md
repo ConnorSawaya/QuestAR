@@ -33,6 +33,10 @@ npm start
 
 `npm start` serves the `dist` folder through `server.js`. It uses Railway's `PORT` environment variable automatically and falls back to port `4173` locally.
 
+## GitHub Pages Static Demo
+
+The `main` branch deploys a static build to <https://connorsawaya.github.io/QuestAR/>. See [the Pages setup and local demo notes](docs/github-pages.md). GitHub Pages does not run the Node API or its database-backed features.
+
 The local server also exposes:
 
 ```text
