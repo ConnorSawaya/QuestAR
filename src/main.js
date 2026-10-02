@@ -3,6 +3,7 @@ import 'leaflet/dist/leaflet.css';
 
 import L from 'leaflet';
 import * as THREE from 'three';
+import { generateLocalTopic, isPagesDemoMode } from './local-demo.js';
 
 const RETICLE_RADIUS = 0.16;
 const COLLECTIBLE_HEIGHT = 0.56;
@@ -17,7 +18,9 @@ const PROGRESS_STORE = 'animalProgress';
 const PLAYER_ID_KEY = 'quest-ar-player-id';
 const PLAYER_NAME_KEY = 'quest-ar-player-name';
 const LOCAL_PROFILE_KEY = 'quest-ar-local-profile';
+const LOCAL_PROGRESS_KEY = 'quest-ar-local-progress';
 const USAGE_STATS_KEY = 'quest-ar-usage-stats';
+const PAGES_DEMO_MODE = isPagesDemoMode(import.meta.env.MODE, window.location.hostname);
 
 let TRIVIA_COLLECTIBLES = [
   {
@@ -188,6 +191,9 @@ const profileTimeToday = document.querySelector('#profile-time-today');
 const profileParentView = document.querySelector('#profile-parent-view');
 const leaderboardList = document.querySelector('#leaderboard-list');
 const regenerateTopic = document.querySelector('#regenerate-topic');
+const localDemoButton = document.querySelector('#start-local-demo');
+const leaderboardTitle = document.querySelector('#leaderboard-title');
+const leaderboardNote = document.querySelector('#leaderboard-note');
 const tabBar = document.querySelector('#tab-bar');
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const closestArrow = document.querySelector('#closest-arrow');
@@ -208,6 +214,8 @@ const xrRoot = document.querySelector('#xr-root');
 let scene;
 let camera;
 let renderer;
+let webglReady = false;
+let localDemoActive = false;
 let controller;
 let reticle;
 let currentSession = null;
@@ -267,10 +275,41 @@ const cameraWorldPosition = new THREE.Vector3();
 const upAxis = new THREE.Vector3(0, 1, 0);
 const orbTextureCache = new Map();
 
-initScene();
+function readLocalStorage(key) {
+  try {
+    return window.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorage(key, value) {
+  try {
+    window.localStorage?.setItem(key, value);
+    return true;
+  } catch (error) {
+    console.warn('Browser storage is unavailable; this session will remain in memory:', error.message);
+    return false;
+  }
+}
+
+function removeLocalStorage(key) {
+  try {
+    window.localStorage?.removeItem(key);
+  } catch {
+    // Storage can be disabled by browser privacy settings.
+  }
+}
+
+try {
+  webglReady = initScene();
+} catch (error) {
+  console.warn('WebGL is unavailable; AR can still be replaced with the local quiz demo:', error.message);
+  showUnsupported('WebGL is unavailable here. You can still play the local quiz demo without AR.');
+}
 startLocationTracking();
 startUsageTracking();
-void loadProgressState().then(() => {
+const progressReady = loadProgressState().then(() => {
   updateCollectionHud();
   updateModePanels();
 });
@@ -282,9 +321,21 @@ setupTabBar();
 setActiveMode('hunt');
 updateModePanels();
 
+if (PAGES_DEMO_MODE) {
+  localDemoButton.classList.remove('hidden');
+  leaderboardTitle.textContent = 'Sample Leaderboard';
+  leaderboardNote.textContent = 'Sample players and distances are fictional. Your score stays local to this browser.';
+  topicStatus.textContent = 'This static demo uses built-in question packs. Progress saves when browser storage is available.';
+  topicMessages.firstElementChild?.replaceChildren(document.createTextNode('Local Quest: Choose a built-in topic pack, or try a custom topic for general study questions.'));
+} else {
+  leaderboardTitle.textContent = 'Demo Leaderboard';
+  leaderboardNote.textContent = 'Sample entries are fictional demo data.';
+}
+
 startButton.addEventListener('pointerup', handleStartButtonInteraction);
 startButton.addEventListener('touchend', handleStartButtonInteraction, { passive: false });
 startButton.addEventListener('click', handleStartButtonInteraction);
+localDemoButton.addEventListener('click', startLocalDemo);
 quizClose.addEventListener('click', closeQuizPanel);
 topicForm.addEventListener('submit', handleTopicSubmit);
 topicDifficultySelect.addEventListener('change', handleTopicDifficultyChange);
@@ -312,11 +363,23 @@ function openProgressDb() {
 
 async function loadProgressState() {
   try {
+    const saved = JSON.parse(readLocalStorage(LOCAL_PROGRESS_KEY) || '{}');
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+      savedAnimalProgress = saved;
+    }
+  } catch {
+    removeLocalStorage(LOCAL_PROGRESS_KEY);
+  }
+
+  try {
     const db = await openProgressDb();
     const transaction = db.transaction(PROGRESS_STORE, 'readonly');
     const store = transaction.objectStore(PROGRESS_STORE);
     const records = await requestToPromise(store.getAll());
-    savedAnimalProgress = Object.fromEntries(records.map((record) => [record.id, record]));
+    savedAnimalProgress = {
+      ...savedAnimalProgress,
+      ...Object.fromEntries(records.map((record) => [record.id, record])),
+    };
     db.close();
   } catch (error) {
     console.warn('Progress database unavailable:', error.message);
@@ -335,6 +398,7 @@ async function saveAnimalProgress(collectible) {
   };
 
   savedAnimalProgress[collectible.item.id] = record;
+  writeLocalStorage(LOCAL_PROGRESS_KEY, JSON.stringify(savedAnimalProgress));
 
   try {
     const db = await openProgressDb();
@@ -363,13 +427,13 @@ function transactionToPromise(transaction) {
 }
 
 function getUsageStats() {
-  const saved = localStorage.getItem(USAGE_STATS_KEY);
+  const saved = readLocalStorage(USAGE_STATS_KEY);
 
   if (saved) {
     try {
       return normalizeUsageStats(JSON.parse(saved));
     } catch {
-      localStorage.removeItem(USAGE_STATS_KEY);
+      removeLocalStorage(USAGE_STATS_KEY);
     }
   }
 
@@ -430,13 +494,18 @@ function updateUsageStats(shouldPersist) {
   lastUsageTickMs = now;
 
   if (shouldPersist) {
-    localStorage.setItem(USAGE_STATS_KEY, JSON.stringify(usageStats));
+    writeLocalStorage(USAGE_STATS_KEY, JSON.stringify(usageStats));
   }
 
   updateModePanels();
 }
 
 function startLocationTracking() {
+  if (PAGES_DEMO_MODE) {
+    mapSummary.textContent = 'Location is not requested in the static demo. The map is disabled to keep the demo private.';
+    return;
+  }
+
   if (!('geolocation' in navigator) || locationWatchId !== null) {
     if (!('geolocation' in navigator)) {
       mapSummary.textContent = 'Location is unavailable on this device. The map tab needs location access for nearby orb zones.';
@@ -514,24 +583,32 @@ async function handleTopicSubmit(event) {
 async function generateTopicQuest(topic, resetExisting) {
   generatingTopic = true;
   topicGenerate.disabled = true;
-  topicStatus.textContent = 'Generating topic orbs with AI...';
+  topicStatus.textContent = PAGES_DEMO_MODE ? 'Preparing a built-in local question pack...' : 'Generating topic orbs with AI...';
   appendTopicMessage('You', topic);
-  appendTopicMessage('Quest AI', 'Building your AR quest.');
+  appendTopicMessage(PAGES_DEMO_MODE ? 'Quest (local)' : 'Quest AI', 'Building your quest.');
 
   try {
-    const payload = await postApi('/api/generate-topic', {
-      topic,
-      count: 6,
-      difficulty: selectedTopicDifficulty,
-      accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
-    });
+    const payload = PAGES_DEMO_MODE
+      ? generateLocalTopic({ topic, count: 6, difficulty: selectedTopicDifficulty })
+      : await postApi('/api/generate-topic', {
+          topic,
+          count: 6,
+          difficulty: selectedTopicDifficulty,
+          accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
+        });
     applyGeneratedTopic(payload, resetExisting);
-    topicStatus.textContent = `${payload.orbs.length} ${payload.topic} orbs ready. Opening AR now...`;
-    appendTopicMessage('Quest AI', payload.summary || `Generated ${payload.orbs.length} orbs.`);
-    await autoStartArForTopic();
+    topicStatus.textContent = PAGES_DEMO_MODE
+      ? `${payload.orbs.length} ${payload.topic} orbs ready. ${payload.summary}`
+      : `${payload.orbs.length} ${payload.topic} orbs ready. Opening AR now...`;
+    appendTopicMessage(PAGES_DEMO_MODE ? 'Quest (local)' : 'Quest AI', payload.summary || `Generated ${payload.orbs.length} orbs.`);
+    if (PAGES_DEMO_MODE && !arSupported) {
+      await startLocalDemo();
+    } else if (!localDemoActive) {
+      await autoStartArForTopic();
+    }
   } catch (error) {
     topicStatus.textContent = 'Could not generate topic right now. Try again.';
-    appendTopicMessage('Quest AI', `Generation failed: ${error.message}`);
+    appendTopicMessage(PAGES_DEMO_MODE ? 'Quest (local)' : 'Quest AI', `Generation failed: ${error.message}`);
   } finally {
     generatingTopic = false;
     topicGenerate.disabled = false;
@@ -611,37 +688,37 @@ async function openTopicRegenerator() {
 }
 
 function getOrCreatePlayerId() {
-  const existing = localStorage.getItem(PLAYER_ID_KEY);
+  const existing = readLocalStorage(PLAYER_ID_KEY);
 
   if (existing) {
     return existing;
   }
 
   const id = crypto.randomUUID ? crypto.randomUUID() : `player-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  localStorage.setItem(PLAYER_ID_KEY, id);
+  writeLocalStorage(PLAYER_ID_KEY, id);
   return id;
 }
 
 function getOrCreatePlayerName() {
-  const existing = localStorage.getItem(PLAYER_NAME_KEY);
+  const existing = readLocalStorage(PLAYER_NAME_KEY);
 
   if (existing) {
     return existing;
   }
 
   const name = `Explorer ${playerId.slice(-4).toUpperCase()}`;
-  localStorage.setItem(PLAYER_NAME_KEY, name);
+  writeLocalStorage(PLAYER_NAME_KEY, name);
   return name;
 }
 
 function getDefaultProfile() {
-  const saved = localStorage.getItem(LOCAL_PROFILE_KEY);
+  const saved = readLocalStorage(LOCAL_PROFILE_KEY);
 
   if (saved) {
     try {
       return JSON.parse(saved);
     } catch {
-      localStorage.removeItem(LOCAL_PROFILE_KEY);
+      removeLocalStorage(LOCAL_PROFILE_KEY);
     }
   }
 
@@ -660,6 +737,11 @@ function getDefaultProfile() {
 }
 
 async function refreshPlayerProfile() {
+  if (PAGES_DEMO_MODE) {
+    updateModePanels();
+    return;
+  }
+
   try {
     const payload = await apiFetch(`/api/profile?playerId=${encodeURIComponent(playerId)}&name=${encodeURIComponent(playerName)}`);
     applyProfilePayload(payload);
@@ -670,14 +752,16 @@ async function refreshPlayerProfile() {
 }
 
 async function recordAnswerEvent(correct, collectible, questionIndex, bonusMultiplier = 1) {
-  const payload = await postApi('/api/answer', {
-    playerId,
-    name: playerName,
-    animalId: collectible.item.id,
-    questionIndex,
-    correct,
-    bonusMultiplier,
-  }).catch(() => applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier));
+  const payload = PAGES_DEMO_MODE
+    ? applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier)
+    : await postApi('/api/answer', {
+        playerId,
+        name: playerName,
+        animalId: collectible.item.id,
+        questionIndex,
+        correct,
+        bonusMultiplier,
+      }).catch(() => applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier));
 
   applyProfilePayload(payload);
   showXpToast(payload.xpGained || 0, payload.leveledUp, payload.profile?.level);
@@ -685,11 +769,13 @@ async function recordAnswerEvent(correct, collectible, questionIndex, bonusMulti
 }
 
 async function recordCollectionEvent(collectible) {
-  const payload = await postApi('/api/collect', {
-    playerId,
-    name: playerName,
-    animalId: collectible.item.id,
-  }).catch(() => applyLocalCollectionEvent(collectible.item.id));
+  const payload = PAGES_DEMO_MODE
+    ? applyLocalCollectionEvent(collectible.item.id)
+    : await postApi('/api/collect', {
+        playerId,
+        name: playerName,
+        animalId: collectible.item.id,
+      }).catch(() => applyLocalCollectionEvent(collectible.item.id));
 
   applyProfilePayload(payload);
   showXpToast(payload.xpGained || 0, payload.leveledUp, payload.profile?.level);
@@ -697,6 +783,10 @@ async function recordCollectionEvent(collectible) {
 }
 
 async function apiFetch(path) {
+  if (PAGES_DEMO_MODE) {
+    throw new Error('The static demo uses local data and does not call a server API.');
+  }
+
   const response = await fetch(path, { headers: { Accept: 'application/json' } });
 
   if (!response.ok) {
@@ -707,6 +797,10 @@ async function apiFetch(path) {
 }
 
 async function postApi(path, body) {
+  if (PAGES_DEMO_MODE) {
+    throw new Error('The static demo uses local data and does not call a server API.');
+  }
+
   const response = await fetch(path, {
     method: 'POST',
     headers: {
@@ -726,7 +820,7 @@ async function postApi(path, body) {
 function applyProfilePayload(payload) {
   if (payload?.profile) {
     playerProfile = decorateClientProfile(payload.profile);
-    localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
+    writeLocalStorage(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
   }
 
   if (payload?.leaderboard) {
@@ -734,6 +828,45 @@ function applyProfilePayload(payload) {
   }
 
   updateModePanels();
+}
+
+function createLocalDemoCollectible(item) {
+  const progress = savedAnimalProgress[item.id] || {};
+  return {
+    item,
+    collected: Boolean(progress.collected),
+    questionIndex: Math.min(Number(progress.questionIndex) || 0, item.questions.length),
+    revealed: true,
+    group: { visible: !progress.collected, position: new THREE.Vector3() },
+  };
+}
+
+async function startLocalDemo() {
+  await progressReady;
+
+  if (currentSession) {
+    await currentSession.end();
+  }
+
+  if (!topicReady) {
+    const topic = topicInput.value.trim() || currentTopicPrompt;
+    applyGeneratedTopic(generateLocalTopic({ topic, count: 6, difficulty: selectedTopicDifficulty }), true);
+  }
+
+  localDemoActive = true;
+  document.body.classList.add('is-local-demo-active');
+  unsupportedPanel.classList.add('hidden');
+  gamePanel.classList.remove('hidden');
+  gamePanel.classList.add('is-expanded');
+  tabBar.classList.remove('hidden');
+  resetCollectibles();
+  collectibles = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map(createLocalDemoCollectible);
+  collectiblesSpawned = true;
+  setActiveMode('hunt');
+  updateCollectionHud();
+  updateModePanels();
+  topicStatus.textContent = 'Local demo active. Pick an orb to answer questions; progress saves when browser storage is available.';
+  statusText.textContent = 'Playing without AR. No camera or location is used.';
 }
 
 function applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier = 1) {
@@ -754,7 +887,7 @@ function applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier = 1) {
 
   playerProfile = decorateClientProfile(nextProfile);
   leaderboard = [{ rank: 1, ...playerProfile }];
-  localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
+  writeLocalStorage(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
   return { profile: playerProfile, leaderboard, xpGained, leveledUp: playerProfile.level > previousLevel, correct };
 }
 
@@ -775,7 +908,7 @@ function applyLocalCollectionEvent(animalId) {
     animalCount: Object.keys(animalsCollected).length,
   });
   leaderboard = [{ rank: 1, ...playerProfile }];
-  localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
+  writeLocalStorage(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
   return { profile: playerProfile, leaderboard, xpGained, leveledUp: playerProfile.level > previousLevel };
 }
 
@@ -918,10 +1051,16 @@ function initScene() {
   scene.add(controller);
 
   window.addEventListener('resize', handleResize);
+  return true;
 }
 
 async function checkWebXRSupport() {
   const userAgent = navigator.userAgent;
+
+  if (!webglReady) {
+    showUnsupported('WebGL could not start on this device. The local quiz demo works without AR graphics.');
+    return;
+  }
 
   if (/GSA|; wv\)/i.test(userAgent)) {
     statusText.textContent = 'Open this URL in the Chrome app, not the Google app or an in-app browser.';
@@ -962,6 +1101,9 @@ async function startARSession() {
   }
 
   try {
+    if (!webglReady || !renderer) {
+      throw new Error('WebGL is unavailable on this device. Use the local quiz demo instead.');
+    }
     manualArRetryAvailable = false;
     startButton.disabled = true;
     startButton.classList.remove('hidden');
@@ -1023,20 +1165,24 @@ function endARSession() {
   hitTestSource = null;
   hitTestSourceRequested = false;
   stableFloorFrames = 0;
-  reticle.visible = false;
+  if (reticle) reticle.visible = false;
   stopQuizTimer();
   resetCollectibles();
   closeQuizPanel();
   gamePanel.classList.add('hidden');
   gamePanel.classList.remove('is-expanded');
   tabBar.classList.add('hidden');
-  renderer.setAnimationLoop(null);
+  renderer?.setAnimationLoop(null);
   document.body.classList.remove('is-ar-active');
   updateStartButtonState();
   statusText.textContent = 'AR ended. Start again to deploy the trivia hunt.';
 }
 
 function render(timestamp, frame) {
+  if (!renderer || !webglReady) {
+    return;
+  }
+
   if (frame) {
     const referenceSpace = renderer.xr.getReferenceSpace();
     const session = renderer.xr.getSession();
@@ -1705,12 +1851,14 @@ async function startNextOrbWave() {
   orbWaveIndex += 1;
 
   try {
-    const payload = await postApi('/api/generate-topic', {
-      topic: currentTopicPrompt,
-      count: 6,
-      difficulty: selectedTopicDifficulty,
-      accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
-    });
+    const payload = PAGES_DEMO_MODE
+      ? generateLocalTopic({ topic: currentTopicPrompt, count: 6, difficulty: selectedTopicDifficulty, wave: orbWaveIndex })
+      : await postApi('/api/generate-topic', {
+          topic: currentTopicPrompt,
+          count: 6,
+          difficulty: selectedTopicDifficulty,
+          accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
+        });
     applyGeneratedTopic(withWaveOrbIds(payload, orbWaveIndex), false);
   } catch (error) {
     console.warn('Could not generate next wave:', error.message);
@@ -1721,7 +1869,15 @@ async function startNextOrbWave() {
   }
 
   resetCollectibles();
-  spawnCollectiblesNearPlayer(lastFloorY);
+  if (localDemoActive) {
+    collectibles = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map(createLocalDemoCollectible);
+    collectiblesSpawned = true;
+    updateCollectionHud();
+    updateModePanels();
+    gameHint.textContent = 'New local wave ready. Pick an orb from the list to keep playing.';
+  } else {
+    spawnCollectiblesNearPlayer(lastFloorY);
+  }
 }
 
 function withWaveOrbIds(payload, waveIndex) {
@@ -1754,6 +1910,13 @@ function updateCollectionHud() {
   const collectedCount = getCollectedCount();
   gameCount.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES} collected`;
   renderCollectibleList();
+
+  if (localDemoActive) {
+    gameHint.textContent = collectedCount === TOTAL_COLLECTIBLES
+      ? 'Quest complete. A fresh local question wave is ready.'
+      : 'Choose any orb card to start its quiz. Correct answers earn XP and save on this device.';
+    return;
+  }
 
   if (!collectiblesSpawned) {
     gameHint.textContent = `Find the floor first. ${TOTAL_COLLECTIBLES} hidden topic orbs will be placed across a walking route.`;
@@ -1836,7 +1999,7 @@ function updateModePanels() {
 }
 
 function updateClosestArrow() {
-  if (!collectiblesSpawned || activeQuiz) {
+  if (localDemoActive || !collectiblesSpawned || activeQuiz) {
     closestArrow.classList.add('hidden');
     return;
   }
@@ -1857,6 +2020,18 @@ function updateClosestArrow() {
 }
 
 function updateRadarPanel() {
+  if (localDemoActive) {
+    const remaining = collectibles.filter((collectible) => !collectible.collected).length;
+    radarSummary.textContent = remaining
+      ? `${remaining} local quiz orb${remaining === 1 ? '' : 's'} ready. Choose one from the Hunt tab.`
+      : 'All sample orbs completed. A new local wave is on the way.';
+    radarList.replaceChildren();
+    const prompt = document.createElement('strong');
+    prompt.textContent = 'No direction tracking in local mode';
+    radarList.appendChild(prompt);
+    return;
+  }
+
   if (!collectiblesSpawned) {
     radarSummary.textContent = 'Waiting for the floor lock so the radar can pick up signals.';
     radarList.replaceChildren();
@@ -1900,6 +2075,11 @@ function updateRadarPanel() {
 
 function updateAreaMap() {
   if (!areaMapElement) {
+    return;
+  }
+
+  if (PAGES_DEMO_MODE || localDemoActive) {
+    mapSummary.textContent = 'Map unavailable in the local demo. This mode does not request or use your location.';
     return;
   }
 
@@ -2104,8 +2284,10 @@ function renderJournalDetail() {
   note.textContent = collected
     ? item.journalNote
     : progress.revealed
-      ? `Seen in AR, but not captured yet. Complete ${item.questions.length - answeredCount} more quiz question${item.questions.length - answeredCount === 1 ? '' : 's'} to finish this orb.`
-      : 'Not seen yet. Use Radar, walk closer, and reveal this orb in AR.';
+      ? `${localDemoActive ? 'Available in the local demo' : 'Seen in AR'}, but not captured yet. Complete ${item.questions.length - answeredCount} more quiz question${item.questions.length - answeredCount === 1 ? '' : 's'} to finish this orb.`
+      : localDemoActive
+        ? 'Not started yet. Choose this orb from the Hunt tab to begin its quiz.'
+        : 'Not seen yet. Use Radar, walk closer, and reveal this orb in AR.';
 
   journalDetail.append(title, meta, note);
 
@@ -2134,19 +2316,23 @@ function updateProfilePanel() {
   const displayLeaderboard = getDisplayLeaderboard();
   const playerLeaderboardEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id);
 
-  profileSummary.textContent = collectedCount === TOTAL_COLLECTIBLES
-    ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
-    : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your 3-mile area.`;
+  profileSummary.textContent = PAGES_DEMO_MODE
+    ? `${playerProfile.name} is level ${playerProfile.level}. Your profile and quest progress stay in this browser.`
+    : collectedCount === TOTAL_COLLECTIBLES
+      ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
+      : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your 3-mile area.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
   profileLevel.textContent = playerProfile.level;
   profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
   profileStreak.textContent = `${playerProfile.streak}x`;
-  profileNearest.textContent = nearest ? `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}` : 'Cleared';
+  profileNearest.textContent = nearest
+    ? localDemoActive ? `${nearest.item.title} · ready` : `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}`
+    : 'Cleared';
   profileRank.textContent = playerLeaderboardEntry ? `#${playerLeaderboardEntry.rank}` : '--';
   profileDifficulty.textContent = selectedTopicDifficulty;
   profileTimeTotal.textContent = formatUsageDuration(usageStats.totalSeconds);
   profileTimeToday.textContent = formatUsageDuration(usageStats.todaySeconds);
-  profileParentView.textContent = 'Ready';
+  profileParentView.textContent = PAGES_DEMO_MODE ? 'This device' : 'Ready';
   renderLeaderboard(displayLeaderboard);
 }
 
@@ -2175,6 +2361,12 @@ function renderLeaderboard(displayLeaderboard) {
       identity.append(name, youTag);
     } else {
       identity.appendChild(name);
+      if (entry.isSimulated) {
+        const sampleTag = document.createElement('span');
+        sampleTag.className = 'leaderboard-list__tag leaderboard-list__tag--sample';
+        sampleTag.textContent = 'SAMPLE';
+        identity.appendChild(sampleTag);
+      }
     }
 
     const score = document.createElement('span');
@@ -2399,7 +2591,7 @@ function getCollectibleScreenAngleDegrees(collectible) {
 }
 
 function resetCollectibles() {
-  collectibles.forEach((collectible) => scene.remove(collectible.group));
+  collectibles.forEach((collectible) => scene?.remove(collectible.group));
   collectibles = [];
   collectiblesSpawned = false;
   highlightedCollectible = null;
@@ -2420,6 +2612,28 @@ function renderCollectibleList() {
     title.textContent = item.title;
 
     const status = document.createElement('span');
+    if (localDemoActive) {
+      status.textContent = collected
+        ? 'Completed on this device'
+        : collectible?.questionIndex
+          ? `Question ${collectible.questionIndex + 1} of ${item.questions.length}`
+          : 'Ready to play';
+      const copy = document.createElement('div');
+      copy.append(title, status);
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'button button--secondary button--small local-orb-button';
+      action.textContent = collected ? 'Completed' : collectible?.questionIndex ? 'Continue quiz' : 'Start quiz';
+      action.disabled = collected;
+      action.addEventListener('click', () => {
+        if (collectible && !collectible.collected) openQuizForCollectible(collectible);
+      });
+      listItem.classList.add('local-orb-card');
+      listItem.append(copy, action);
+      gameList.appendChild(listItem);
+      return;
+    }
+
     if (!collectiblesSpawned) {
       status.textContent = 'Waiting to spawn';
     } else if (collected) {
@@ -2546,6 +2760,10 @@ function shuffleArray(items) {
 }
 
 function handleResize() {
+  if (!camera || !renderer) {
+    return;
+  }
+
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
