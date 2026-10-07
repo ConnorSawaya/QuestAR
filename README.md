@@ -1,15 +1,22 @@
 # Quest AR
 
-A mobile-first WebXR educational scavenger hunt built with Vite, JavaScript, and Three.js.
+A mobile-first WebXR learning game that turns trivia into an augmented-reality scavenger hunt.
 
-Players choose a topic, generate AI-backed trivia orbs, start an immersive AR session, scan the floor, follow a radar route, and walk to reveal hidden topic orbs. Each orb stays anchored after discovery and can be completed by getting close, centering it, tapping it, and answering its trivia quiz.
+**Static demo:** https://connorsawaya.github.io/QuestAR/
 
-Orb achievement progress is saved in the browser with IndexedDB. XP, answer streaks, levels, completed orb counts, and the global leaderboard are saved through the Node server.
+Players choose a topic, generate trivia orbs, scan the floor, follow a radar route, and physically move through an AR space to discover and answer questions.
 
-The server uses:
+### Highlights
 
-1. PostgreSQL when `DATABASE_URL` exists, which is the recommended Railway setup.
-2. A local `.data/quest-ar-db.json` file when `DATABASE_URL` is not set in development, which is useful for local testing. The server refuses to start in production without PostgreSQL because Railway's filesystem is ephemeral.
+- WebXR immersive AR with floor detection and anchored 3D objects
+- AI-backed topic generation with built-in fallback question banks
+- Radar-guided scavenger-hunt gameplay
+- XP, streaks, levels, collections, and a leaderboard
+- PostgreSQL-backed server mode with local development fallback
+- Mobile-first experience built with Three.js, Vite, JavaScript, and Node.js
+
+> The GitHub Pages link is a static showcase. Full API, database, and AI-backed features require the Node server.
+
 
 ## Run Locally
 
