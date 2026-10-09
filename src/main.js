@@ -1,17 +1,23 @@
 import './style.css';
-import 'leaflet/dist/leaflet.css';
-
-import L from 'leaflet';
-import * as THREE from 'three';
+import { createApiClient } from './api-client.js';
 import { generateLocalTopic, isPagesDemoMode } from './local-demo.js';
+import { createSpawnSlots, easeAngleDegrees, getQuestionTimeLimitSeconds, horizontalDistance, isLevelGroundPose } from './gameplay-rules.js';
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, {
+      scope: import.meta.env.BASE_URL,
+    }).catch((error) => {
+      console.warn('QuestAR could not register offline support:', error.message);
+    });
+  });
+}
 
 const RETICLE_RADIUS = 0.16;
 const COLLECTIBLE_HEIGHT = 0.56;
 let TOTAL_COLLECTIBLES = 6;
-const REVEAL_DISTANCE_METERS = 4;
-const INTERACTION_DISTANCE_METERS = 3;
-const MAP_RADIUS_MILES = 3;
-const QUESTION_TIME_LIMIT_SECONDS = 20;
+const REVEAL_DISTANCE_METERS = 1.8;
+const INTERACTION_DISTANCE_METERS = 1.25;
 const DB_NAME = 'quest-ar-progress';
 const DB_VERSION = 1;
 const PROGRESS_STORE = 'animalProgress';
@@ -21,6 +27,10 @@ const LOCAL_PROFILE_KEY = 'quest-ar-local-profile';
 const LOCAL_PROGRESS_KEY = 'quest-ar-local-progress';
 const USAGE_STATS_KEY = 'quest-ar-usage-stats';
 const PAGES_DEMO_MODE = isPagesDemoMode(import.meta.env.MODE, window.location.hostname);
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const LOCAL_ONLY_MODE = PAGES_DEMO_MODE || !API_BASE_URL;
+const LOCAL_ASSISTANT_NAME = PAGES_DEMO_MODE ? 'QuestAR sample' : 'QuestAR';
+const { get: apiFetch, post: postApi } = createApiClient({ baseUrl: API_BASE_URL, localOnly: LOCAL_ONLY_MODE });
 
 let TRIVIA_COLLECTIBLES = [
   {
@@ -159,6 +169,7 @@ let TRIVIA_COLLECTIBLES = [
 
 const startButton = document.querySelector('#start-ar');
 const statusText = document.querySelector('#status');
+const installButton = document.querySelector('#install-app');
 const unsupportedPanel = document.querySelector('#unsupported');
 const gamePanel = document.querySelector('#game-panel');
 const gameGrip = document.querySelector('#game-grip');
@@ -183,17 +194,23 @@ const profileProgress = document.querySelector('#profile-progress');
 const profileLevel = document.querySelector('#profile-level');
 const profileXp = document.querySelector('#profile-xp');
 const profileStreak = document.querySelector('#profile-streak');
-const profileNearest = document.querySelector('#profile-nearest');
-const profileRank = document.querySelector('#profile-rank');
 const profileDifficulty = document.querySelector('#profile-difficulty');
 const profileTimeTotal = document.querySelector('#profile-time-total');
 const profileTimeToday = document.querySelector('#profile-time-today');
-const profileParentView = document.querySelector('#profile-parent-view');
 const leaderboardList = document.querySelector('#leaderboard-list');
 const regenerateTopic = document.querySelector('#regenerate-topic');
 const localDemoButton = document.querySelector('#start-local-demo');
 const leaderboardTitle = document.querySelector('#leaderboard-title');
 const leaderboardNote = document.querySelector('#leaderboard-note');
+const leaderboardCard = document.querySelector('#leaderboard-card');
+const questPreview = document.querySelector('#quest-preview');
+const previewTitle = document.querySelector('#preview-title');
+const previewSummary = document.querySelector('#preview-summary');
+const previewStops = document.querySelector('#preview-stops');
+const previewQuestions = document.querySelector('#preview-questions');
+const previewDifficulty = document.querySelector('#preview-difficulty');
+const previewTimeLimit = document.querySelector('#preview-time-limit');
+const enableLocationButton = document.querySelector('#enable-location');
 const tabBar = document.querySelector('#tab-bar');
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const closestArrow = document.querySelector('#closest-arrow');
@@ -214,7 +231,13 @@ const xrRoot = document.querySelector('#xr-root');
 let scene;
 let camera;
 let renderer;
+let THREE;
+let threeModulePromise = null;
+let leafletModulePromise = null;
+let leafletCssPromise = null;
+let deferredInstallPrompt = null;
 let webglReady = false;
+let sceneInitializationPromise = null;
 let localDemoActive = false;
 let controller;
 let reticle;
@@ -227,7 +250,6 @@ let highlightedCollectible = null;
 let activeQuiz = null;
 let stableFloorFrames = 0;
 let gamePanelTouchStartY = null;
-let hasDepthOcclusion = false;
 let activeMode = 'hunt';
 let lastHudRefreshMs = 0;
 let startInteractionInFlight = false;
@@ -249,31 +271,24 @@ let manualArRetryAvailable = false;
 let areaMap = null;
 let userCoords = null;
 let userLocationMarker = null;
-let userRadiusCircle = null;
-let orbZoneLayer = null;
-let locationWatchId = null;
-let lastAreaMapRenderKey = '';
+let userAccuracyCircle = null;
+let locationRequestInFlight = false;
 let usageStats = getUsageStats();
 let lastUsageTickMs = Date.now();
 let activeQuizTimerId = null;
 let activeQuizDeadlineMs = 0;
 let activeQuestionBonusMultiplier = 1;
 let quizResolutionInFlight = false;
-
-const SIMULATED_COMPETITORS = [
-  { id: 'sim-lyra', name: 'Lyra', xp: 1180, bestStreak: 18, streak: 5 },
-  { id: 'sim-kai', name: 'Kai', xp: 940, bestStreak: 15, streak: 4 },
-  { id: 'sim-mira', name: 'Mira', xp: 710, bestStreak: 12, streak: 3 },
-  { id: 'sim-soren', name: 'Soren', xp: 520, bestStreak: 9, streak: 2 },
-  { id: 'sim-juno', name: 'Juno', xp: 320, bestStreak: 6, streak: 1 },
-];
-
-const selectionRaycaster = new THREE.Raycaster();
-const selectionOrigin = new THREE.Vector3();
-const selectionDirection = new THREE.Vector3();
-const cameraWorldPosition = new THREE.Vector3();
-const upAxis = new THREE.Vector3(0, 1, 0);
-const orbTextureCache = new Map();
+let selectionRaycaster;
+let selectionOrigin;
+let selectionDirection;
+let cameraWorldPosition;
+let upAxis;
+const orbGeometryCache = new Map();
+let screenWakeLock = null;
+let smoothedClosestAngle = null;
+let lastClosestCollectibleId = null;
+let lastFloorHitPosition = null;
 
 function readLocalStorage(key) {
   try {
@@ -301,13 +316,6 @@ function removeLocalStorage(key) {
   }
 }
 
-try {
-  webglReady = initScene();
-} catch (error) {
-  console.warn('WebGL is unavailable; AR can still be replaced with the local quiz demo:', error.message);
-  showUnsupported('WebGL is unavailable here. You can still play the local quiz demo without AR.');
-}
-startLocationTracking();
 startUsageTracking();
 const progressReady = loadProgressState().then(() => {
   updateCollectionHud();
@@ -321,25 +329,55 @@ setupTabBar();
 setActiveMode('hunt');
 updateModePanels();
 
-if (PAGES_DEMO_MODE) {
+if (LOCAL_ONLY_MODE) {
   localDemoButton.classList.remove('hidden');
-  leaderboardTitle.textContent = 'Sample Leaderboard';
-  leaderboardNote.textContent = 'Sample players and distances are fictional. Your score stays local to this browser.';
-  topicStatus.textContent = 'This static demo uses built-in question packs. Progress saves when browser storage is available.';
-  topicMessages.firstElementChild?.replaceChildren(document.createTextNode('Local Quest: Choose a built-in topic pack, or try a custom topic for general study questions.'));
+  topicStatus.textContent = 'Built-in question packs work offline and save progress on this device.';
+  statusText.textContent = 'Choose a topic to prepare a route. Camera and location are used only when you choose those features.';
+  topicMessages.firstElementChild?.replaceChildren(document.createTextNode('Choose a built-in topic pack or try a custom topic. Without the question service, custom topics use general study practice.'));
 } else {
-  leaderboardTitle.textContent = 'Demo Leaderboard';
-  leaderboardNote.textContent = 'Sample entries are fictional demo data.';
+  leaderboardTitle.textContent = 'Shared leaderboard';
+  leaderboardNote.textContent = 'Scores are loaded from the QuestAR server.';
+  statusText.textContent = 'Prepare a route first. Camera and location are requested only when needed.';
 }
 
-startButton.addEventListener('pointerup', handleStartButtonInteraction);
-startButton.addEventListener('touchend', handleStartButtonInteraction, { passive: false });
 startButton.addEventListener('click', handleStartButtonInteraction);
 localDemoButton.addEventListener('click', startLocalDemo);
+enableLocationButton?.addEventListener('click', requestMapLocation);
 quizClose.addEventListener('click', closeQuizPanel);
 topicForm.addEventListener('submit', handleTopicSubmit);
 topicDifficultySelect.addEventListener('change', handleTopicDifficultyChange);
 regenerateTopic.addEventListener('click', openTopicRegenerator);
+document.querySelectorAll('[data-topic]').forEach((button) => {
+  button.addEventListener('click', () => {
+    topicInput.value = button.dataset.topic || '';
+    topicInput.focus();
+    topicStatus.textContent = `${topicInput.value} selected. Choose a challenge level, then build your hunt.`;
+  });
+});
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  installButton.classList.remove('hidden');
+});
+installButton.addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+
+  installButton.disabled = true;
+  try {
+    await deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+  } catch (error) {
+    console.warn('QuestAR install prompt was unavailable:', error.message);
+  } finally {
+    deferredInstallPrompt = null;
+    installButton.disabled = false;
+    installButton.classList.add('hidden');
+  }
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  installButton.classList.add('hidden');
+});
 document.addEventListener('visibilitychange', handleVisibilityUsageSync);
 window.addEventListener('beforeunload', persistUsageTick);
 
@@ -461,9 +499,11 @@ function startUsageTracking() {
 function handleVisibilityUsageSync() {
   if (document.visibilityState === 'hidden') {
     persistUsageTick();
+    releaseScreenWakeLock();
     return;
   }
 
+  if (currentSession || localDemoActive) void requestScreenWakeLock();
   lastUsageTickMs = Date.now();
   updateUsageStats(false);
 }
@@ -501,39 +541,50 @@ function updateUsageStats(shouldPersist) {
 }
 
 function startLocationTracking() {
-  if (PAGES_DEMO_MODE) {
-    mapSummary.textContent = 'Location is not requested in the static demo. The map is disabled to keep the demo private.';
+  if (LOCAL_ONLY_MODE || localDemoActive) {
+    mapSummary.textContent = 'Location is off in local quiz mode. Your route and progress stay on this device.';
     return;
   }
 
-  if (!('geolocation' in navigator) || locationWatchId !== null) {
-    if (!('geolocation' in navigator)) {
-      mapSummary.textContent = 'Location is unavailable on this device. The map tab needs location access for nearby orb zones.';
-    }
+  if (!('geolocation' in navigator)) {
+    mapSummary.textContent = 'Location is unavailable in this browser. You can keep playing without the map.';
     return;
   }
 
-  mapSummary.textContent = 'Finding your local hunt area...';
-  locationWatchId = navigator.geolocation.watchPosition(
+  if (locationRequestInFlight) return;
+  locationRequestInFlight = true;
+  enableLocationButton.disabled = true;
+  mapSummary.textContent = 'Finding your current location…';
+  navigator.geolocation.getCurrentPosition(
     (position) => {
+      locationRequestInFlight = false;
+      enableLocationButton.disabled = false;
       userCoords = {
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
       };
+      enableLocationButton.textContent = 'Refresh location';
       updateAreaMap();
-      updateModePanels();
     },
-    () => {
-      mapSummary.textContent = 'Enable location in Chrome to view orb zones around your real area.';
+    (error) => {
+      locationRequestInFlight = false;
+      enableLocationButton.disabled = false;
+      mapSummary.textContent = error.code === error.PERMISSION_DENIED
+        ? 'Location was denied. The map can stay blank; your hunt does not need location.'
+        : 'Could not get a location fix. Try again or keep playing without the map.';
       updateAreaMap();
     },
     {
-      enableHighAccuracy: true,
-      maximumAge: 15000,
-      timeout: 12000,
+      enableHighAccuracy: false,
+      maximumAge: 30000,
+      timeout: 10000,
     },
   );
+}
+
+function requestMapLocation() {
+  startLocationTracking();
 }
 
 function updateStartButtonState() {
@@ -551,21 +602,21 @@ function updateStartButtonState() {
     return;
   }
 
-  startButton.classList.add('hidden');
-
-  if (!arSupported) {
-    startButton.disabled = true;
-    startButton.textContent = 'Checking AR...';
-    return;
-  }
-
-  startButton.disabled = true;
-  startButton.textContent = topicReady ? 'Opening AR...' : 'Waiting for topic';
+  startButton.classList.toggle('hidden', !topicReady || !arSupported || localDemoActive);
+  startButton.disabled = generatingTopic || startInteractionInFlight || !webglReady;
+  startButton.textContent = webglReady ? 'Begin AR hunt' : 'Preparing AR…';
+  localDemoButton.classList.toggle('hidden', !topicReady || localDemoActive);
 }
 
 function handleTopicDifficultyChange() {
   selectedTopicDifficulty = topicDifficultySelect.value;
+  if (topicReady) {
+    topicReady = false;
+    questPreview.classList.add('hidden');
+    topicStatus.textContent = 'Challenge changed. Prepare the route again to rebuild its questions and timer.';
+  }
   updateModePanels();
+  updateStartButtonState();
 }
 
 async function handleTopicSubmit(event) {
@@ -582,33 +633,38 @@ async function handleTopicSubmit(event) {
 
 async function generateTopicQuest(topic, resetExisting) {
   generatingTopic = true;
+  topicReady = false;
+  questPreview.classList.add('hidden');
+  updateStartButtonState();
   topicGenerate.disabled = true;
-  topicStatus.textContent = PAGES_DEMO_MODE ? 'Preparing a built-in local question pack...' : 'Generating topic orbs with AI...';
+  topicStatus.textContent = LOCAL_ONLY_MODE ? 'Preparing your study hunt...' : 'Building your study hunt...';
   appendTopicMessage('You', topic);
-  appendTopicMessage(PAGES_DEMO_MODE ? 'Quest (local)' : 'Quest AI', 'Building your quest.');
+  appendTopicMessage(LOCAL_ASSISTANT_NAME, 'Preparing your study hunt.');
 
   try {
-    const payload = PAGES_DEMO_MODE
-      ? generateLocalTopic({ topic, count: 6, difficulty: selectedTopicDifficulty })
-      : await postApi('/api/generate-topic', {
+    let payload;
+    if (LOCAL_ONLY_MODE) {
+      payload = generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty });
+    } else {
+      try {
+        payload = await postApi('/api/generate-topic', {
           topic,
           count: 6,
           difficulty: selectedTopicDifficulty,
           accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
         });
-    applyGeneratedTopic(payload, resetExisting);
-    topicStatus.textContent = PAGES_DEMO_MODE
-      ? `${payload.orbs.length} ${payload.topic} orbs ready. ${payload.summary}`
-      : `${payload.orbs.length} ${payload.topic} orbs ready. Opening AR now...`;
-    appendTopicMessage(PAGES_DEMO_MODE ? 'Quest (local)' : 'Quest AI', payload.summary || `Generated ${payload.orbs.length} orbs.`);
-    if (PAGES_DEMO_MODE && !arSupported) {
-      await startLocalDemo();
-    } else if (!localDemoActive) {
-      await autoStartArForTopic();
+      } catch (error) {
+        payload = generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty });
+        payload.summary = `${payload.summary} The server could not be reached, so this route uses local practice questions.`;
+        console.warn('QuestAR switched to local questions:', error.message);
+      }
     }
+    applyGeneratedTopic(payload, resetExisting);
+    topicStatus.textContent = `${payload.orbs.length} ${payload.topic} stops are ready. Review the route before starting.`;
+    appendTopicMessage(LOCAL_ASSISTANT_NAME, payload.summary || `Prepared ${payload.orbs.length} stops.`);
   } catch (error) {
     topicStatus.textContent = 'Could not generate topic right now. Try again.';
-    appendTopicMessage(PAGES_DEMO_MODE ? 'Quest (local)' : 'Quest AI', `Generation failed: ${error.message}`);
+    appendTopicMessage(LOCAL_ASSISTANT_NAME, `Could not build the hunt: ${error.message}`);
   } finally {
     generatingTopic = false;
     topicGenerate.disabled = false;
@@ -621,8 +677,7 @@ function appendTopicMessage(sender, message) {
   const strong = document.createElement('strong');
   strong.textContent = `${sender}: `;
   entry.append(strong, message);
-  topicMessages.appendChild(entry);
-  topicMessages.scrollTop = topicMessages.scrollHeight;
+  topicMessages.replaceChildren(entry);
 }
 
 function applyGeneratedTopic(payload, resetExisting) {
@@ -640,6 +695,13 @@ function applyGeneratedTopic(payload, resetExisting) {
   selectedTopicDifficulty = payload.difficulty || selectedTopicDifficulty;
   topicDifficultySelect.value = selectedTopicDifficulty;
   topicReady = true;
+  previewTitle.textContent = currentTopicPrompt;
+  previewSummary.textContent = currentTopicSummary;
+  previewStops.textContent = TOTAL_COLLECTIBLES;
+  previewQuestions.textContent = TRIVIA_COLLECTIBLES.reduce((total, item) => total + item.questions.length, 0);
+  previewDifficulty.textContent = selectedTopicDifficulty;
+  if (previewTimeLimit) previewTimeLimit.textContent = `${getQuestionTimeLimitSeconds(selectedTopicDifficulty)} sec per question`;
+  questPreview.classList.remove('hidden');
 
   if (resetExisting && collectiblesSpawned) {
     resetCollectibles();
@@ -650,12 +712,24 @@ function applyGeneratedTopic(payload, resetExisting) {
 }
 
 function normalizeGeneratedOrbForClient(orb) {
-  if (!orb?.id || !orb?.title || !Array.isArray(orb.questions) || orb.questions.length < 3) {
+  if (!orb?.id || !String(orb?.title || '').trim() || !Array.isArray(orb.questions) || orb.questions.length < 3) {
     return null;
   }
 
+  const questions = orb.questions.slice(0, 3).map((question) => {
+    const prompt = String(question?.prompt || '').trim();
+    const options = Array.isArray(question?.options) ? question.options.map((option) => String(option || '').trim()) : [];
+    const answer = question?.answer;
+    if (!prompt || options.length !== 3 || options.some((option) => !option) || !Number.isInteger(answer) || answer < 0 || answer > 2) return null;
+    return { prompt, options, answer };
+  });
+  if (questions.some((question) => !question)) return null;
+
   return {
     ...orb,
+    id: String(orb.id).slice(0, 80),
+    title: String(orb.title).trim().slice(0, 42),
+    questions,
     category: normalizeClientCategory(orb.category || orb.title),
     accent: /^#[0-9a-fA-F]{6}$/.test(orb.accent || '') ? orb.accent : '#79f0c2',
     rarity: orb.rarity || 'Generated Quest',
@@ -683,8 +757,20 @@ async function openTopicRegenerator() {
     await currentSession.end();
   }
 
+  if (localDemoActive) {
+    localDemoActive = false;
+    document.body.classList.remove('is-local-demo-active');
+    gamePanel.classList.add('hidden');
+    gamePanel.classList.remove('is-expanded');
+    tabBar.classList.add('hidden');
+    releaseScreenWakeLock();
+  }
+
   topicInput.focus();
-  topicStatus.textContent = `Enter a new topic to regenerate your ${selectedTopicDifficulty.toLowerCase()} AR orbs.`;
+  topicReady = false;
+  questPreview.classList.add('hidden');
+  topicStatus.textContent = `Enter a new topic to prepare another ${selectedTopicDifficulty.toLowerCase()} route.`;
+  updateStartButtonState();
 }
 
 function getOrCreatePlayerId() {
@@ -737,7 +823,7 @@ function getDefaultProfile() {
 }
 
 async function refreshPlayerProfile() {
-  if (PAGES_DEMO_MODE) {
+  if (LOCAL_ONLY_MODE) {
     updateModePanels();
     return;
   }
@@ -752,7 +838,7 @@ async function refreshPlayerProfile() {
 }
 
 async function recordAnswerEvent(correct, collectible, questionIndex, bonusMultiplier = 1) {
-  const payload = PAGES_DEMO_MODE
+  const payload = LOCAL_ONLY_MODE
     ? applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier)
     : await postApi('/api/answer', {
         playerId,
@@ -769,7 +855,7 @@ async function recordAnswerEvent(correct, collectible, questionIndex, bonusMulti
 }
 
 async function recordCollectionEvent(collectible) {
-  const payload = PAGES_DEMO_MODE
+  const payload = LOCAL_ONLY_MODE
     ? applyLocalCollectionEvent(collectible.item.id)
     : await postApi('/api/collect', {
         playerId,
@@ -780,41 +866,6 @@ async function recordCollectionEvent(collectible) {
   applyProfilePayload(payload);
   showXpToast(payload.xpGained || 0, payload.leveledUp, payload.profile?.level);
   return payload;
-}
-
-async function apiFetch(path) {
-  if (PAGES_DEMO_MODE) {
-    throw new Error('The static demo uses local data and does not call a server API.');
-  }
-
-  const response = await fetch(path, { headers: { Accept: 'application/json' } });
-
-  if (!response.ok) {
-    throw new Error(`API ${response.status}`);
-  }
-
-  return response.json();
-}
-
-async function postApi(path, body) {
-  if (PAGES_DEMO_MODE) {
-    throw new Error('The static demo uses local data and does not call a server API.');
-  }
-
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(`API ${response.status}`);
-  }
-
-  return response.json();
 }
 
 function applyProfilePayload(payload) {
@@ -837,7 +888,7 @@ function createLocalDemoCollectible(item) {
     collected: Boolean(progress.collected),
     questionIndex: Math.min(Number(progress.questionIndex) || 0, item.questions.length),
     revealed: true,
-    group: { visible: !progress.collected, position: new THREE.Vector3() },
+    group: { visible: !progress.collected },
   };
 }
 
@@ -850,10 +901,11 @@ async function startLocalDemo() {
 
   if (!topicReady) {
     const topic = topicInput.value.trim() || currentTopicPrompt;
-    applyGeneratedTopic(generateLocalTopic({ topic, count: 6, difficulty: selectedTopicDifficulty }), true);
+    applyGeneratedTopic(generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty }), true);
   }
 
   localDemoActive = true;
+  void requestScreenWakeLock();
   document.body.classList.add('is-local-demo-active');
   unsupportedPanel.classList.add('hidden');
   gamePanel.classList.remove('hidden');
@@ -865,7 +917,7 @@ async function startLocalDemo() {
   setActiveMode('hunt');
   updateCollectionHud();
   updateModePanels();
-  topicStatus.textContent = 'Local demo active. Pick an orb to answer questions; progress saves when browser storage is available.';
+  topicStatus.textContent = 'Quiz route active. Choose a stop to answer its questions. Progress saves on this device.';
   statusText.textContent = 'Playing without AR. No camera or location is used.';
 }
 
@@ -886,7 +938,6 @@ function applyLocalAnswerEvent(correct, questionIndex, bonusMultiplier = 1) {
   }
 
   playerProfile = decorateClientProfile(nextProfile);
-  leaderboard = [{ rank: 1, ...playerProfile }];
   writeLocalStorage(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
   return { profile: playerProfile, leaderboard, xpGained, leveledUp: playerProfile.level > previousLevel, correct };
 }
@@ -907,7 +958,6 @@ function applyLocalCollectionEvent(animalId) {
     animalsCollected,
     animalCount: Object.keys(animalsCollected).length,
   });
-  leaderboard = [{ rank: 1, ...playerProfile }];
   writeLocalStorage(LOCAL_PROFILE_KEY, JSON.stringify(playerProfile));
   return { profile: playerProfile, leaderboard, xpGained, leveledUp: playerProfile.level > previousLevel };
 }
@@ -989,40 +1039,20 @@ function showXpToast(xpGained, leveledUp, level) {
 }
 
 function handleStartButtonInteraction(event) {
-  if (event.type === 'touchend') {
-    event.preventDefault();
-  }
-
   if (startButton.disabled || startInteractionInFlight) {
     return;
   }
 
-  if (!manualArRetryAvailable && !currentSession) {
+  if (!currentSession && (!topicReady || !arSupported || !webglReady)) {
     return;
   }
 
   startInteractionInFlight = true;
-  statusText.textContent = currentSession ? 'Closing AR session...' : 'Retrying AR...';
+  statusText.textContent = currentSession ? 'Closing AR session…' : 'Opening the AR camera…';
   void startARSession().finally(() => {
     startInteractionInFlight = false;
+    updateStartButtonState();
   });
-}
-
-async function autoStartArForTopic() {
-  if (!arSupported || currentSession || startInteractionInFlight) {
-    return;
-  }
-
-  manualArRetryAvailable = false;
-  startInteractionInFlight = true;
-  topicStatus.textContent = 'Opening AR...';
-  statusText.textContent = 'Topic ready. Opening AR...';
-
-  try {
-    await startARSession();
-  } finally {
-    startInteractionInFlight = false;
-  }
 }
 
 function initScene() {
@@ -1030,8 +1060,8 @@ function initScene() {
 
   camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 30);
 
-  renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
   renderer.domElement.className = 'xr-canvas';
@@ -1054,13 +1084,40 @@ function initScene() {
   return true;
 }
 
+async function ensureThree({ initializeScene = false } = {}) {
+  if (!threeModulePromise) {
+    threeModulePromise = import('three').then((module) => {
+      THREE = module;
+      selectionRaycaster = new THREE.Raycaster();
+      selectionOrigin = new THREE.Vector3();
+      selectionDirection = new THREE.Vector3();
+      cameraWorldPosition = new THREE.Vector3();
+      upAxis = new THREE.Vector3(0, 1, 0);
+      lastFloorHitPosition = new THREE.Vector3();
+    }).catch((error) => {
+      threeModulePromise = null;
+      throw error;
+    });
+  }
+
+  await threeModulePromise;
+  if (!initializeScene || webglReady) return true;
+
+  if (!sceneInitializationPromise) {
+    sceneInitializationPromise = Promise.resolve().then(initScene).then((ready) => {
+      webglReady = ready;
+      return ready;
+    }).catch((error) => {
+      sceneInitializationPromise = null;
+      throw error;
+    });
+  }
+
+  return sceneInitializationPromise;
+}
+
 async function checkWebXRSupport() {
   const userAgent = navigator.userAgent;
-
-  if (!webglReady) {
-    showUnsupported('WebGL could not start on this device. The local quiz demo works without AR graphics.');
-    return;
-  }
 
   if (/GSA|; wv\)/i.test(userAgent)) {
     statusText.textContent = 'Open this URL in the Chrome app, not the Google app or an in-app browser.';
@@ -1080,15 +1137,14 @@ async function checkWebXRSupport() {
     }
 
     arSupported = true;
+    statusText.textContent = 'AR is supported. Your camera opens only after you press Begin AR hunt.';
     updateStartButtonState();
-
-    if (topicReady && !currentSession) {
-      void autoStartArForTopic();
-    }
-
-    if (!/GSA|; wv\)/i.test(userAgent)) {
-      statusText.textContent = 'Generate a topic quest and AR will open automatically.';
-    }
+    void ensureThree({ initializeScene: true }).then(() => updateStartButtonState()).catch((error) => {
+      console.warn('WebGL could not start:', error.message);
+      arSupported = false;
+      showUnsupported('This device could not start 3D AR graphics. Play the prepared route in local quiz mode.');
+      updateStartButtonState();
+    });
   } catch (error) {
     showUnsupported(`Could not check WebXR support: ${error.message}`);
   }
@@ -1102,18 +1158,18 @@ async function startARSession() {
 
   try {
     if (!webglReady || !renderer) {
-      throw new Error('WebGL is unavailable on this device. Use the local quiz demo instead.');
+      throw new Error('AR graphics are still preparing. Try again in a moment or play the quiz route.');
     }
     manualArRetryAvailable = false;
     startButton.disabled = true;
     startButton.classList.remove('hidden');
     startButton.textContent = 'Starting...';
-    statusText.textContent = 'Requesting camera-based AR session...';
+    statusText.textContent = 'Requesting camera access for this AR session…';
     renderer.xr.setReferenceSpaceType('local');
+    void requestScreenWakeLock();
 
     const session = await requestARSession();
     currentSession = session;
-    hasDepthOcclusion = false;
     document.body.classList.add('is-ar-active');
     session.addEventListener('end', endARSession);
 
@@ -1128,13 +1184,39 @@ async function startARSession() {
     startButton.disabled = false;
     updateStartButtonState();
     topicStatus.textContent = 'AR active. Scan the floor to place your route.';
-    statusText.textContent = 'Move your phone slowly to find the floor.';
+    statusText.textContent = 'Move your phone slowly to find level ground. Keep the area around you clear.';
   } catch (error) {
+    const failedSession = currentSession;
+    currentSession = null;
+    failedSession?.removeEventListener('end', endARSession);
+    if (failedSession) await failedSession.end().catch(() => {});
+    renderer?.setAnimationLoop(null);
+    hitTestSource = null;
+    hitTestSourceRequested = false;
+    stableFloorFrames = 0;
+    document.body.classList.remove('is-ar-active');
+    releaseScreenWakeLock();
     manualArRetryAvailable = true;
     updateStartButtonState();
-    topicStatus.textContent = 'AR could not open automatically. Use Retry AR.';
+    topicStatus.textContent = 'AR could not open. Review the message and retry, or use quiz mode.';
     statusText.textContent = `AR could not start: ${error.message}`;
   }
+}
+
+async function requestScreenWakeLock() {
+  if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  try {
+    screenWakeLock = await navigator.wakeLock.request('screen');
+    screenWakeLock.addEventListener('release', () => { screenWakeLock = null; }, { once: true });
+  } catch (error) {
+    console.info('Screen wake lock is unavailable:', error.message);
+  }
+}
+
+function releaseScreenWakeLock() {
+  if (!screenWakeLock) return;
+  void screenWakeLock.release().catch(() => {});
+  screenWakeLock = null;
 }
 
 async function requestARSession() {
@@ -1161,10 +1243,10 @@ async function requestARSession() {
 
 function endARSession() {
   currentSession = null;
-  hasDepthOcclusion = false;
   hitTestSource = null;
   hitTestSourceRequested = false;
   stableFloorFrames = 0;
+  lastFloorHitPosition?.set(0, 0, 0);
   if (reticle) reticle.visible = false;
   stopQuizTimer();
   resetCollectibles();
@@ -1173,9 +1255,13 @@ function endARSession() {
   gamePanel.classList.remove('is-expanded');
   tabBar.classList.add('hidden');
   renderer?.setAnimationLoop(null);
+  releaseScreenWakeLock();
+  manualArRetryAvailable = false;
+  smoothedClosestAngle = null;
+  lastClosestCollectibleId = null;
   document.body.classList.remove('is-ar-active');
   updateStartButtonState();
-  statusText.textContent = 'AR ended. Start again to deploy the trivia hunt.';
+  statusText.textContent = 'AR ended. Your answered questions are saved; begin again to place a new route.';
 }
 
 function render(timestamp, frame) {
@@ -1189,9 +1275,15 @@ function render(timestamp, frame) {
 
     if (!hitTestSourceRequested) {
       session.requestReferenceSpace('viewer').then((viewerSpace) => {
-        session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+        session.requestHitTestSource({ space: viewerSpace, entityTypes: ['plane'] }).then((source) => {
           hitTestSource = source;
+        }).catch((error) => {
+          hitTestSourceRequested = false;
+          statusText.textContent = `Surface scanning is unavailable: ${error.message}`;
         });
+      }).catch((error) => {
+        hitTestSourceRequested = false;
+        statusText.textContent = `Could not prepare surface scanning: ${error.message}`;
       });
 
       hitTestSourceRequested = true;
@@ -1199,24 +1291,40 @@ function render(timestamp, frame) {
 
     if (hitTestSource && !collectiblesSpawned) {
       const hitResults = frame.getHitTestResults(hitTestSource);
+      camera.getWorldPosition(cameraWorldPosition);
+      let pose = null;
+      for (const hit of hitResults) {
+        const candidate = hit.getPose(referenceSpace);
+        if (candidate && isLevelGroundPose(candidate.transform.matrix, cameraWorldPosition.y)) {
+          pose = candidate;
+          break;
+        }
+      }
 
-      if (hitResults.length > 0) {
-        const hit = hitResults[0];
-        const pose = hit.getPose(referenceSpace);
-
+      if (pose) {
+        const matrix = pose.transform.matrix;
+        const floorDeltaX = matrix[12] - lastFloorHitPosition.x;
+        const floorDeltaY = matrix[13] - lastFloorHitPosition.y;
+        const floorDeltaZ = matrix[14] - lastFloorHitPosition.z;
+        if (stableFloorFrames > 0 && floorDeltaX ** 2 + floorDeltaY ** 2 + floorDeltaZ ** 2 > 0.0144) {
+          stableFloorFrames = 0;
+        }
+        lastFloorHitPosition.set(matrix[12], matrix[13], matrix[14]);
         reticle.visible = true;
-        reticle.matrix.fromArray(pose.transform.matrix);
+        reticle.matrix.fromArray(matrix);
         stableFloorFrames += 1;
 
         if (stableFloorFrames < 8) {
-          statusText.textContent = 'Floor found. Hold steady while the hunt map settles.';
+          statusText.textContent = 'Level ground found. Hold steady to place the first stop.';
         } else {
           spawnCollectiblesFromReticle();
         }
       } else {
         reticle.visible = false;
         stableFloorFrames = 0;
-        statusText.textContent = 'Searching for a floor. Move your phone slowly.';
+        statusText.textContent = hitResults.length
+          ? 'Looking for level ground below the phone. Tilt toward a clear patch of floor.'
+          : 'Scanning for level ground. Move your phone slowly toward a clear area.';
       }
     }
   }
@@ -1224,7 +1332,8 @@ function render(timestamp, frame) {
   updateCollectibles(performance.now() * 0.001);
 
   if (timestamp - lastHudRefreshMs > 220) {
-    updateModePanels();
+    updateClosestArrow();
+    if (activeMode === 'radar') updateRadarPanel();
     lastHudRefreshMs = timestamp;
   }
 
@@ -1237,7 +1346,7 @@ function handleARSelect() {
   }
 
   if (!collectiblesSpawned) {
-    statusText.textContent = stableFloorFrames > 0 ? 'Hold steady. The hidden topic orbs are being placed across the route.' : 'Move your phone slowly until the floor is found.';
+    statusText.textContent = stableFloorFrames > 0 ? 'Hold steady. The nearby route is being placed.' : 'Move your phone slowly until level ground is found.';
     return;
   }
 
@@ -1261,7 +1370,7 @@ function handleARSelect() {
   if (distance > INTERACTION_DISTANCE_METERS) {
     const remainingDistance = distance - INTERACTION_DISTANCE_METERS;
     statusText.textContent = `${collectible.item.title} is ${formatDistance(distance)} away. Walk ${formatDistance(remainingDistance)} closer, then tap it.`;
-    gameHint.textContent = `Keep ${collectible.item.title} centered and walk closer. You must be within ${formatDistance(INTERACTION_DISTANCE_METERS)} to start the quiz.`;
+    gameHint.textContent = `Keep ${collectible.item.title} centered and move closer. You must be within ${formatDistance(INTERACTION_DISTANCE_METERS)} to start the quiz.`;
     return;
   }
 
@@ -1292,13 +1401,11 @@ function spawnCollectiblesNearPlayer(floorY) {
 
   heading.normalize();
   const right = new THREE.Vector3().crossVectors(heading, upAxis).normalize().negate();
-  const spawnSlots = shuffleArray(createSpawnSlots(TOTAL_COLLECTIBLES));
+  const spawnSlots = createSpawnSlots(TOTAL_COLLECTIBLES);
 
   collectibles = TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item, index) => {
-    const slot = spawnSlots[index % spawnSlots.length];
-    const angle = slot.angle + (Math.random() - 0.5) * 0.08;
-    const distance = slot.distance + (Math.random() - 0.5) * 0.24;
-    const offset = heading.clone().multiplyScalar(Math.cos(angle) * distance).add(right.clone().multiplyScalar(Math.sin(angle) * distance));
+    const slot = spawnSlots[index];
+    const offset = heading.clone().multiplyScalar(Math.cos(slot.angle) * slot.distance).add(right.clone().multiplyScalar(Math.sin(slot.angle) * slot.distance));
     const position = playerBase.clone().add(offset);
     position.y = floorY;
 
@@ -1311,17 +1418,7 @@ function spawnCollectiblesNearPlayer(floorY) {
   stableFloorFrames = 0;
   reticle.visible = false;
   updateCollectionHud();
-  statusText.textContent = `${TOTAL_COLLECTIBLES} topic orbs spawned across the route. Follow the arrow and walk close until an orb appears.`;
-}
-
-function createSpawnSlots(count) {
-  const slotCount = Math.max(count, 1);
-  return Array.from({ length: slotCount }, (_, index) => {
-    const progress = slotCount === 1 ? 0.5 : index / (slotCount - 1);
-    const angle = THREE.MathUtils.lerp(-1.05, 1.05, progress) + (index % 2 === 0 ? -0.18 : 0.18);
-    const distance = 5.4 + index * 2.2;
-    return { angle, distance };
-  });
+  statusText.textContent = `${TOTAL_COLLECTIBLES} stops placed within a few steps. Keep your surroundings clear as you move.`;
 }
 
 function createCollectible(item, groundPosition) {
@@ -1338,7 +1435,7 @@ function createCollectible(item, groundPosition) {
   group.add(shadow);
 
   const groundRing = new THREE.Mesh(
-    new THREE.TorusGeometry(0.32, 0.022, 16, 48),
+    getSharedOrbGeometry('ground-ring', () => new THREE.TorusGeometry(0.32, 0.018, 8, 28)),
     new THREE.MeshBasicMaterial({ color: item.accent, transparent: true, opacity: 0.78 }),
   );
   groundRing.rotation.x = Math.PI / 2;
@@ -1346,7 +1443,7 @@ function createCollectible(item, groundPosition) {
   group.add(groundRing);
 
   const beacon = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.045, 0.11, 1.7, 18, 1, true),
+    getSharedOrbGeometry('beacon', () => new THREE.CylinderGeometry(0.045, 0.11, 1.35, 10, 1, true)),
     new THREE.MeshBasicMaterial({
       color: item.accent,
       transparent: true,
@@ -1355,7 +1452,7 @@ function createCollectible(item, groundPosition) {
       depthWrite: false,
     }),
   );
-  beacon.position.y = 0.86;
+  beacon.position.y = 0.68;
   group.add(beacon);
 
   const orbModel = createTopicOrbModel(item);
@@ -1368,19 +1465,19 @@ function createCollectible(item, groundPosition) {
     opacity: 0.7,
     side: THREE.DoubleSide,
   });
-  const halo = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.024, 16, 56), haloMaterial);
+  const halo = new THREE.Mesh(getSharedOrbGeometry('orb-band', () => new THREE.TorusGeometry(0.28, 0.012, 6, 24)), haloMaterial);
   halo.rotation.x = Math.PI / 2;
   halo.position.y = -0.27;
   floatRig.add(halo);
 
   const cardTexture = createCollectibleTexture(item);
   const cardMaterial = new THREE.MeshBasicMaterial({ map: cardTexture, transparent: true, side: THREE.DoubleSide });
-  const card = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.28), cardMaterial);
+  const card = new THREE.Mesh(getSharedOrbGeometry('field-tag', () => new THREE.PlaneGeometry(0.58, 0.3)), cardMaterial);
   card.position.y = 0.72;
   floatRig.add(card);
 
   const hitArea = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.25, 1.35),
+    getSharedOrbGeometry('hit-area', () => new THREE.PlaneGeometry(1.25, 1.35)),
     new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide }),
   );
   hitArea.position.y = 0.32;
@@ -1397,6 +1494,7 @@ function createCollectible(item, groundPosition) {
     hitArea,
     item,
     orbModel,
+    ownedTextures: [cardTexture],
     questionIndex: Math.min(progress.questionIndex || 0, item.questions.length),
     revealed: Boolean(progress.revealed || progress.collected),
     worldBaseY: COLLECTIBLE_HEIGHT,
@@ -1406,206 +1504,58 @@ function createCollectible(item, groundPosition) {
 
 function createTopicOrbModel(item) {
   const group = new THREE.Group();
-  const palette = getOrbPalette(item.category, item.accent);
-  const coreColor = new THREE.Color(palette.core);
-  const shellColor = new THREE.Color(palette.shell);
-  const glowColor = new THREE.Color(palette.glow);
-  const flareTexture = getOrbFlareTexture(palette.flameInner, palette.flameOuter);
-  const standMetal = new THREE.MeshStandardMaterial({ color: 0xb8c3d7, metalness: 0.88, roughness: 0.28 });
-  const standShadow = new THREE.MeshStandardMaterial({ color: 0x536071, metalness: 0.78, roughness: 0.44 });
-  const coreMaterial = new THREE.MeshStandardMaterial({
-    color: shellColor,
-    emissive: glowColor,
-    emissiveIntensity: 0.3,
-    roughness: 0.18,
-    metalness: 0.08,
-    transparent: true,
-    opacity: 0.96,
-  });
-  const innerCoreMaterial = new THREE.MeshStandardMaterial({
-    color: coreColor,
-    emissive: coreColor,
-    emissiveIntensity: 0.38,
-    roughness: 0.12,
+  const color = new THREE.Color(item.accent || '#79974b');
+  const shellMaterial = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.025,
+    roughness: 0.42,
     metalness: 0.04,
   });
-  const auraMaterial = new THREE.MeshBasicMaterial({
-    color: glowColor,
-    transparent: true,
-    opacity: 0.22,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
+  const coreMaterial = new THREE.MeshStandardMaterial({
+    color: '#f4f1df',
+    roughness: 0.55,
+    metalness: 0,
   });
-  const bandMaterial = new THREE.MeshStandardMaterial({
-    color: shellColor,
-    emissive: glowColor,
-    emissiveIntensity: 0.25,
-    roughness: 0.28,
-    metalness: 0.16,
-    transparent: true,
-    opacity: 0.86,
-  });
-
-  addCylinder(group, standShadow, [0, -0.16, 0], [0.19, 0.19, 0.1], 0, 0, 0);
-  addCylinder(group, standMetal, [0, -0.07, 0], [0.13, 0.13, 0.12], 0, 0, 0);
-  addCylinder(group, standMetal, [0, 0.01, 0], [0.09, 0.09, 0.12], 0, 0, 0);
-
-  const outerAura = addSphere(group, auraMaterial, [0, 0.26, 0], [0.42, 0.42, 0.42]);
-  const shell = addSphere(group, coreMaterial, [0, 0.24, 0], [0.29, 0.29, 0.29]);
-  const innerCore = addSphere(group, innerCoreMaterial, [0, 0.24, 0], [0.21, 0.21, 0.21]);
-
-  const bands = [0, 1, 2].map((index) => {
-    const torus = new THREE.Mesh(new THREE.TorusGeometry(0.24 + index * 0.018, 0.022, 16, 64), bandMaterial.clone());
-    torus.position.y = 0.24;
-    torus.rotation.set(index * 0.65, index * 0.44, index * 0.28);
-    group.add(torus);
-    return torus;
-  });
-
-  const flameSprites = Array.from({ length: 5 }, (_, index) => {
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: flareTexture,
-      color: shellColor,
-      transparent: true,
-      opacity: 0.9,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }));
-    const angle = (index / 5) * Math.PI * 2;
-    sprite.position.set(Math.cos(angle) * 0.12, 0.48 + Math.sin(angle * 2) * 0.02, Math.sin(angle) * 0.12);
-    sprite.scale.set(0.3, 0.38, 1);
-    group.add(sprite);
-    return sprite;
-  });
-
-  const sparkSprites = Array.from({ length: 6 }, (_, index) => {
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: flareTexture,
-      color: glowColor,
-      transparent: true,
-      opacity: 0.45,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }));
-    const angle = (index / 6) * Math.PI * 2;
-    sprite.position.set(Math.cos(angle) * 0.22, 0.28 + ((index % 2) * 0.08), Math.sin(angle) * 0.22);
-    sprite.scale.set(0.08, 0.1, 1);
-    group.add(sprite);
-    return sprite;
-  });
-
-  group.userData = {
-    outerAura,
-    shell,
-    innerCore,
-    bands,
-    flameSprites,
-    sparkSprites,
-  };
+  const bandMaterial = new THREE.MeshBasicMaterial({ color: '#19392f' });
+  const shell = new THREE.Mesh(getSharedOrbGeometry('orb-shell', () => new THREE.SphereGeometry(0.22, 16, 12)), shellMaterial);
+  const core = new THREE.Mesh(getSharedOrbGeometry('orb-core', () => new THREE.SphereGeometry(0.1, 12, 8)), coreMaterial);
+  const band = new THREE.Mesh(getSharedOrbGeometry('orb-band-shape', () => new THREE.TorusGeometry(0.255, 0.012, 6, 24)), bandMaterial);
+  band.rotation.set(Math.PI / 2.7, 0.2, 0.2);
+  group.add(shell, core, band);
+  group.userData = { highlightMaterial: shellMaterial };
 
   return group;
 }
 
-function getOrbPalette(category, fallbackAccent) {
-  const normalizedCategory = normalizeClientCategory(category);
-  const palettes = {
-    chemistry: { core: '#9effa0', shell: '#39ff6d', glow: '#59ffcf', flameInner: '#b8ff7b', flameOuter: '#2adf57' },
-    math: { core: '#ffd86b', shell: '#ff9c2f', glow: '#ffb347', flameInner: '#ffe78a', flameOuter: '#ff7c25' },
-    geology: { core: '#ff9d5c', shell: '#ff5a2b', glow: '#ff7f50', flameInner: '#ffc27a', flameOuter: '#ff4b1f' },
-    'computer-science': { core: '#6dd4ff', shell: '#228dff', glow: '#5ba8ff', flameInner: '#89f3ff', flameOuter: '#1d6cff' },
-    biology: { core: '#77ff8c', shell: '#22d65a', glow: '#3dff9d', flameInner: '#b8ff9f', flameOuter: '#1fa74f' },
-    history: { core: '#ffcf86', shell: '#ff9140', glow: '#ffb36b', flameInner: '#ffe7b0', flameOuter: '#ff6b2e' },
-    space: { core: '#7be0ff', shell: '#3f63ff', glow: '#8e7cff', flameInner: '#92edff', flameOuter: '#4d74ff' },
-    art: { core: '#ff8bff', shell: '#ff45c7', glow: '#ff6edb', flameInner: '#ffc0ff', flameOuter: '#ff3d9b' },
-    literature: { core: '#d58cff', shell: '#a64dff', glow: '#d88bff', flameInner: '#f6c5ff', flameOuter: '#c956ff' },
-    general: { core: fallbackAccent || '#79f0c2', shell: fallbackAccent || '#79f0c2', glow: '#b4fff0', flameInner: '#eaffff', flameOuter: fallbackAccent || '#79f0c2' },
-  };
-
-  return palettes[normalizedCategory] || palettes.general;
-}
-
-function getOrbFlareTexture(innerColor, outerColor) {
-  const cacheKey = `${innerColor}-${outerColor}`;
-
-  if (orbTextureCache.has(cacheKey)) {
-    return orbTextureCache.get(cacheKey);
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const context = canvas.getContext('2d');
-  const gradient = context.createRadialGradient(128, 160, 10, 128, 160, 110);
-  gradient.addColorStop(0, innerColor);
-  gradient.addColorStop(0.4, `${innerColor}cc`);
-  gradient.addColorStop(1, `${outerColor}00`);
-
-  context.clearRect(0, 0, 256, 256);
-  context.fillStyle = gradient;
-  context.beginPath();
-  context.moveTo(128, 18);
-  context.bezierCurveTo(214, 54, 214, 148, 128, 238);
-  context.bezierCurveTo(42, 148, 42, 54, 128, 18);
-  context.fill();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  orbTextureCache.set(cacheKey, texture);
-  return texture;
-}
-
-function addSphere(group, material, position, scale) {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), material);
-  mesh.position.set(...position);
-  mesh.scale.set(...scale);
-  group.add(mesh);
-  return mesh;
-}
-
-function addCylinder(group, material, position, scale, rotateX, rotateY, rotateZ) {
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 18), material);
-  mesh.position.set(...position);
-  mesh.scale.set(...scale);
-  mesh.rotation.set(rotateX, rotateY, rotateZ);
-  group.add(mesh);
-  return mesh;
-}
-
-function addBox(group, material, position, scale) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
-  mesh.position.set(...position);
-  mesh.scale.set(...scale);
-  group.add(mesh);
-  return mesh;
+function getSharedOrbGeometry(key, createGeometry) {
+  if (!orbGeometryCache.has(key)) orbGeometryCache.set(key, createGeometry());
+  return orbGeometryCache.get(key);
 }
 
 function createCollectibleTexture(item) {
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 256;
+  canvas.width = 320;
+  canvas.height = 160;
   const context = canvas.getContext('2d');
 
-  context.fillStyle = '#08111f';
+  context.fillStyle = '#f4f1df';
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   context.strokeStyle = item.accent;
-  context.lineWidth = 12;
-  context.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
+  context.lineWidth = 5;
+  context.strokeRect(5, 5, canvas.width - 10, canvas.height - 10);
 
-  context.textAlign = 'center';
+  context.textAlign = 'left';
   context.textBaseline = 'middle';
 
-  context.fillStyle = '#ffffff';
-  context.font = '800 58px Arial';
-  context.fillText(item.title, canvas.width / 2, 92);
+  context.fillStyle = '#19392f';
+  context.font = '700 24px sans-serif';
+  context.fillText(item.title.slice(0, 22), 18, 48);
 
-  context.fillStyle = 'rgba(255,255,255,0.84)';
-  context.font = '600 30px Arial';
-  context.fillText('Walk Close + Tap', canvas.width / 2, 154);
-
-  context.fillStyle = item.accent;
-  context.font = '700 24px Arial';
-  context.fillText('3 questions to complete orb', canvas.width / 2, 204);
+  context.fillStyle = '#4e5f52';
+  context.font = '500 15px sans-serif';
+  context.fillText('FIELD STOP · 3 QUESTIONS', 18, 105);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -1638,42 +1588,19 @@ function updateCollectibles(timeSeconds) {
       return;
     }
 
-    const bob = Math.sin(timeSeconds * 1.5 + collectible.bobOffset) * 0.08;
+    const bob = Math.sin(timeSeconds * 1.2 + collectible.bobOffset) * 0.035;
     collectible.floatRig.position.y = collectible.worldBaseY + bob;
-    collectible.orbModel.rotation.y += 0.012;
-    collectible.halo.rotation.z += 0.01;
+    collectible.orbModel.rotation.y += 0.003;
+    collectible.halo.rotation.z += 0.004;
     collectible.card.lookAt(cameraWorldPosition);
     collectible.hitArea.lookAt(cameraWorldPosition);
 
-    const orbVisuals = collectible.orbModel.userData;
-    orbVisuals?.bands?.forEach((band, index) => {
-      band.rotation.x += 0.003 + index * 0.0014;
-      band.rotation.y += 0.005 + index * 0.001;
-    });
-    orbVisuals?.flameSprites?.forEach((sprite, index) => {
-      const flamePulse = 1 + Math.sin(timeSeconds * 4 + collectible.bobOffset + index) * 0.12;
-      sprite.scale.set(0.3 * flamePulse, 0.38 * flamePulse, 1);
-      sprite.material.opacity = 0.72 + Math.sin(timeSeconds * 5 + index) * 0.16;
-    });
-    orbVisuals?.sparkSprites?.forEach((sprite, index) => {
-      const sparkPulse = 1 + Math.sin(timeSeconds * 3 + collectible.bobOffset + index * 0.6) * 0.18;
-      sprite.scale.set(0.08 * sparkPulse, 0.1 * sparkPulse, 1);
-      sprite.material.opacity = 0.32 + Math.sin(timeSeconds * 4 + index) * 0.1;
-    });
-    if (orbVisuals?.outerAura?.material) {
-      orbVisuals.outerAura.material.opacity = 0.18 + Math.sin(timeSeconds * 2.8 + collectible.bobOffset) * 0.05;
-    }
-
     const isHighlighted = collectible === highlightedCollectible;
     collectible.floatRig.scale.setScalar(isHighlighted ? 1.08 : 1);
-    collectible.orbModel.traverse((child) => {
-      if (child.material?.emissiveIntensity !== undefined) {
-        child.material.emissiveIntensity = isHighlighted ? 0.12 : 0.02;
-      }
-    });
-    collectible.halo.material.opacity = isHighlighted ? 0.95 : 0.7;
-    collectible.beacon.material.opacity = isHighlighted ? 0.26 : 0.16;
-    collectible.groundRing.material.opacity = isHighlighted ? 1 : 0.78;
+    collectible.orbModel.userData.highlightMaterial.emissiveIntensity = isHighlighted ? 0.12 : 0.025;
+    collectible.halo.material.opacity = isHighlighted ? 0.82 : 0.56;
+    collectible.beacon.material.opacity = isHighlighted ? 0.2 : 0.12;
+    collectible.groundRing.material.opacity = isHighlighted ? 0.92 : 0.7;
   });
 }
 
@@ -1723,7 +1650,7 @@ function renderQuizQuestion() {
 
   quizTitle.textContent = `You found ${collectible.item.title}`;
   quizStep.textContent = `Question ${collectible.questionIndex + 1} of ${collectible.item.questions.length}`;
-  quizIntro.textContent = 'Keep your streak going. Get all 3 right to complete this orb.';
+  quizIntro.textContent = 'Answer all three questions to add this stop to your journal.';
   quizPrompt.textContent = question.prompt;
   quizOptions.replaceChildren();
   startQuizTimer();
@@ -1732,6 +1659,7 @@ function renderQuizQuestion() {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'quiz-option';
+    button.dataset.optionLetter = String.fromCharCode(65 + index);
     button.textContent = option;
     button.addEventListener('click', () => handleQuizAnswer(index));
     quizOptions.appendChild(button);
@@ -1768,15 +1696,15 @@ async function handleQuizAnswer(answerIndex) {
   }
 
   const bonusLabel = activeQuestionBonusMultiplier > 1 ? ` x${activeQuestionBonusMultiplier.toFixed(2)} bonus` : '';
-  quizFeedback.textContent = `Nice.${bonusLabel} ${collectible.item.questions.length - collectible.questionIndex} more to go.`;
+  quizFeedback.textContent = `Correct.${bonusLabel} ${collectible.item.questions.length - collectible.questionIndex} more to go.`;
   renderQuizQuestion();
 }
 
 function startQuizTimer() {
   stopQuizTimer();
-  activeQuizDeadlineMs = Date.now() + QUESTION_TIME_LIMIT_SECONDS * 1000;
+  activeQuizDeadlineMs = Date.now() + getQuestionTimeLimitSeconds(selectedTopicDifficulty) * 1000;
   updateQuizTimerDisplay();
-  activeQuizTimerId = window.setInterval(updateQuizTimerDisplay, 100);
+  activeQuizTimerId = window.setInterval(updateQuizTimerDisplay, 250);
 }
 
 function stopQuizTimer() {
@@ -1789,7 +1717,7 @@ function stopQuizTimer() {
 function updateQuizTimerDisplay() {
   if (!activeQuiz) {
     stopQuizTimer();
-    quizTimer.textContent = `${QUESTION_TIME_LIMIT_SECONDS}s`;
+    quizTimer.textContent = `${getQuestionTimeLimitSeconds(selectedTopicDifficulty)}s`;
     quizTimer.classList.remove('is-urgent');
     return;
   }
@@ -1806,7 +1734,7 @@ function updateQuizTimerDisplay() {
 
 function getQuestionBonusMultiplier() {
   const remainingMs = Math.max(0, activeQuizDeadlineMs - Date.now());
-  const remainingRatio = Math.min(Math.max(remainingMs / (QUESTION_TIME_LIMIT_SECONDS * 1000), 0), 1);
+  const remainingRatio = Math.min(Math.max(remainingMs / (getQuestionTimeLimitSeconds(selectedTopicDifficulty) * 1000), 0), 1);
   return 1 + remainingRatio * 0.6;
 }
 
@@ -1851,8 +1779,8 @@ async function startNextOrbWave() {
   orbWaveIndex += 1;
 
   try {
-    const payload = PAGES_DEMO_MODE
-      ? generateLocalTopic({ topic: currentTopicPrompt, count: 6, difficulty: selectedTopicDifficulty, wave: orbWaveIndex })
+    const payload = LOCAL_ONLY_MODE
+      ? generateLocalTopic({ topic: currentTopicPrompt, count: 2, difficulty: selectedTopicDifficulty, wave: orbWaveIndex })
       : await postApi('/api/generate-topic', {
           topic: currentTopicPrompt,
           count: 6,
@@ -1898,7 +1826,7 @@ function closeQuizPanel() {
   quizResolutionInFlight = false;
   quizPanel.classList.add('hidden');
   quizFeedback.textContent = '';
-  quizTimer.textContent = `${QUESTION_TIME_LIMIT_SECONDS}s`;
+  quizTimer.textContent = `${getQuestionTimeLimitSeconds(selectedTopicDifficulty)}s`;
   quizTimer.classList.remove('is-urgent');
 
   if (collectiblesSpawned && getCollectedCount() < TOTAL_COLLECTIBLES) {
@@ -1983,19 +1911,21 @@ function setActiveMode(mode) {
 
   tabButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.mode === mode);
+    if (button.dataset.mode === mode) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
 
   if (mode === 'map') {
     updateAreaMap();
   }
+  if (mode === 'radar') updateRadarPanel();
 }
 
 function updateModePanels() {
-  updateRadarPanel();
-  updateAreaMap();
+  if (activeMode === 'radar') updateRadarPanel();
   updateJournalPanel();
   updateProfilePanel();
-  updateClosestArrow();
+  if (!currentSession) updateClosestArrow();
 }
 
 function updateClosestArrow() {
@@ -2011,10 +1941,14 @@ function updateClosestArrow() {
     return;
   }
 
+  if (lastClosestCollectibleId !== nearest.item.id) {
+    lastClosestCollectibleId = nearest.item.id;
+    smoothedClosestAngle = getCollectibleScreenAngleDegrees(nearest);
+  }
   const angle = getCollectibleScreenAngleDegrees(nearest);
+  smoothedClosestAngle = easeAngleDegrees(smoothedClosestAngle ?? angle, angle, 0.42);
   const direction = getCollectibleDirection(nearest);
-  closestArrowIcon.textContent = '↑';
-  closestArrowIcon.style.transform = `rotate(${angle}deg)`;
+  closestArrowIcon.style.transform = `rotate(${smoothedClosestAngle}deg)`;
   closestArrowLabel.textContent = `${getGuidanceText(direction, angle)} · ${formatDistance(getCollectibleDistance(nearest))}`;
   closestArrow.classList.remove('hidden');
 }
@@ -2023,8 +1957,8 @@ function updateRadarPanel() {
   if (localDemoActive) {
     const remaining = collectibles.filter((collectible) => !collectible.collected).length;
     radarSummary.textContent = remaining
-      ? `${remaining} local quiz orb${remaining === 1 ? '' : 's'} ready. Choose one from the Hunt tab.`
-      : 'All sample orbs completed. A new local wave is on the way.';
+      ? `${remaining} quiz stops are ready. Choose one from the Hunt tab.`
+      : 'Route complete. Preparing the next local practice round.';
     radarList.replaceChildren();
     const prompt = document.createElement('strong');
     prompt.textContent = 'No direction tracking in local mode';
@@ -2058,9 +1992,13 @@ function updateRadarPanel() {
   const arrowWrap = document.createElement('div');
   arrowWrap.className = 'radar-compass__bubble';
 
-  const arrow = document.createElement('span');
+  const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   arrow.className = 'radar-compass__arrow';
-  arrow.textContent = '↑';
+  arrow.setAttribute('viewBox', '0 0 24 24');
+  arrow.setAttribute('aria-hidden', 'true');
+  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  arrowPath.setAttribute('d', 'm12 3 7.5 8h-5v10h-5V11h-5L12 3Z');
+  arrow.appendChild(arrowPath);
   arrow.style.transform = `rotate(${angle}deg)`;
 
   const distanceLabel = document.createElement('strong');
@@ -2073,129 +2011,94 @@ function updateRadarPanel() {
   radarList.append(arrowWrap, distanceLabel, targetLabel);
 }
 
-function updateAreaMap() {
+async function loadLeaflet() {
+  if (!leafletModulePromise) {
+    leafletCssPromise ||= import('leaflet/dist/leaflet.css');
+    leafletModulePromise = import('leaflet').then(({ default: module }) => module).catch((error) => {
+      leafletModulePromise = null;
+      throw error;
+    });
+  }
+  await leafletCssPromise;
+  return leafletModulePromise;
+}
+
+async function updateAreaMap() {
   if (!areaMapElement) {
     return;
   }
 
-  if (PAGES_DEMO_MODE || localDemoActive) {
-    mapSummary.textContent = 'Map unavailable in the local demo. This mode does not request or use your location.';
+  if (LOCAL_ONLY_MODE || localDemoActive) {
+    enableLocationButton?.classList.add('hidden');
+    mapSummary.textContent = 'Location is off in local quiz mode. Your hunt works without it.';
     return;
   }
-
-  if (!areaMap && activeMode !== 'map') {
-    return;
-  }
-
-  if (!areaMap) {
-    areaMap = L.map(areaMapElement, {
-      zoomControl: false,
-      attributionControl: true,
-    }).setView([37.7749, -122.4194], 12);
-
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
-      maxZoom: 20,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-    }).addTo(areaMap);
-
-    orbZoneLayer = L.layerGroup().addTo(areaMap);
-  }
-
-  window.requestAnimationFrame(() => {
-    areaMap.invalidateSize();
-  });
 
   if (activeMode !== 'map') {
     return;
   }
 
   if (!userCoords) {
-    mapSummary.textContent = locationWatchId === null
-      ? 'Enable location to see nearby orb zones in a 3-mile radius.'
-      : 'Finding your local hunt area...';
+    enableLocationButton?.classList.remove('hidden');
+    mapSummary.textContent = 'Location is optional. Show your current position here; QuestAR never uses it to place AR stops.';
     return;
   }
 
-  const center = [userCoords.latitude, userCoords.longitude];
-  const radiusMeters = milesToMeters(MAP_RADIUS_MILES);
-  const mapStateKey = JSON.stringify({
-    latitude: userCoords.latitude.toFixed(4),
-    longitude: userCoords.longitude.toFixed(4),
-    items: TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item) => {
-      const progress = getProgressForItem(item);
-      return [item.id, progress.collected, progress.revealed, progress.questionIndex || 0];
-    }),
-  });
+  let leaflet;
+  try {
+    leaflet = await loadLeaflet();
+  } catch (error) {
+    mapSummary.textContent = 'The street map could not load. Your AR route does not depend on it.';
+    console.warn('QuestAR map could not load:', error.message);
+    return;
+  }
 
+  if (activeMode !== 'map') return;
+  enableLocationButton?.classList.remove('hidden');
+
+  if (!areaMap) {
+    areaMap = leaflet.map(areaMapElement, { zoomControl: true, attributionControl: true });
+    leaflet.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 20,
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    }).addTo(areaMap);
+    areaMap.whenReady(() => window.requestAnimationFrame(() => areaMap?.invalidateSize()));
+  }
+
+  const center = [userCoords.latitude, userCoords.longitude];
   if (!userLocationMarker) {
-    userLocationMarker = L.circleMarker(center, {
+    userLocationMarker = leaflet.circleMarker(center, {
       radius: 8,
-      color: '#f8fbff',
+      color: '#19392f',
       weight: 2,
-      fillColor: '#79f0c2',
+      fillColor: '#79974b',
       fillOpacity: 1,
     }).addTo(areaMap);
   } else {
     userLocationMarker.setLatLng(center);
   }
 
-  if (!userRadiusCircle) {
-    userRadiusCircle = L.circle(center, {
-      radius: radiusMeters,
-      color: '#79f0c2',
+  if (!userAccuracyCircle) {
+    userAccuracyCircle = leaflet.circle(center, {
+      radius: Math.max(0, userCoords.accuracy || 0),
+      color: '#244b3e',
       weight: 1,
-      fillColor: '#79f0c2',
-      fillOpacity: 0.08,
+      fillColor: '#79974b',
+      fillOpacity: 0.12,
     }).addTo(areaMap);
   } else {
-    userRadiusCircle.setLatLng(center);
-    userRadiusCircle.setRadius(radiusMeters);
+    userAccuracyCircle.setLatLng(center);
+    userAccuracyCircle.setRadius(Math.max(0, userCoords.accuracy || 0));
   }
 
-  if (lastAreaMapRenderKey !== mapStateKey) {
-    if (orbZoneLayer) {
-      orbZoneLayer.clearLayers();
-    }
-
-    getOrbZoneLocations().forEach(({ item, progress, latitude, longitude, distanceMiles }) => {
-      const marker = L.circleMarker([latitude, longitude], {
-        radius: progress.collected ? 7 : 9,
-        color: item.accent,
-        weight: 2,
-        fillColor: item.accent,
-        fillOpacity: progress.collected ? 0.28 : 0.7,
-        opacity: progress.collected ? 0.5 : 1,
-      });
-      marker.bindPopup(`<strong>${item.title}</strong><br>${progress.collected ? 'Captured' : progress.revealed ? 'Seen in AR' : 'Possible orb zone'}<br>${distanceMiles.toFixed(1)} miles away`);
-      orbZoneLayer?.addLayer(marker);
-    });
-
-    areaMap.fitBounds(userRadiusCircle.getBounds().pad(0.18), { animate: false });
-    lastAreaMapRenderKey = mapStateKey;
+  if ((userCoords.accuracy || 0) > 0) {
+    areaMap.fitBounds(userAccuracyCircle.getBounds().pad(0.25), { animate: false });
+  } else {
+    areaMap.setView(center, 17, { animate: false });
   }
-
-  mapSummary.textContent = `${TOTAL_COLLECTIBLES} orb zones in your local ${MAP_RADIUS_MILES}-mile hunt radius. Captured zones dim out on the map.`;
-}
-
-function getOrbZoneLocations() {
-  if (!userCoords) {
-    return [];
-  }
-
-  return TRIVIA_COLLECTIBLES.slice(0, TOTAL_COLLECTIBLES).map((item, index) => {
-    const progress = getProgressForItem(item);
-    const seed = seedFromString(`${currentTopicPrompt}-${item.id}-${index}`);
-    const distanceMiles = 0.35 + (seed % 240) / 100;
-    const bearingDegrees = (seed * 37) % 360;
-    const coords = offsetCoordinates(userCoords.latitude, userCoords.longitude, distanceMiles, bearingDegrees);
-    return {
-      item,
-      progress,
-      distanceMiles,
-      ...coords,
-    };
-  });
+  const accuracyText = userCoords.accuracy ? `Location estimate ±${Math.round(userCoords.accuracy)} m.` : 'Location estimate received.';
+  mapSummary.textContent = `${accuracyText} AR stops are anchored separately and do not appear on this street map.`;
 }
 
 function updateJournalPanel() {
@@ -2312,41 +2215,32 @@ function renderJournalDetail() {
 
 function updateProfilePanel() {
   const collectedCount = getCollectedCount();
-  const nearest = getNearestCollectible();
   const displayLeaderboard = getDisplayLeaderboard();
-  const playerLeaderboardEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id);
 
-  profileSummary.textContent = PAGES_DEMO_MODE
-    ? `${playerProfile.name} is level ${playerProfile.level}. Your profile and quest progress stay in this browser.`
+  profileSummary.textContent = LOCAL_ONLY_MODE
+    ? `Your progress stays on this device. Local questions and scores are private to this browser.`
     : collectedCount === TOTAL_COLLECTIBLES
-      ? `${playerProfile.name} cleared the route. Keep climbing the 3-mile area leaderboard.`
-      : `${playerProfile.name} is level ${playerProfile.level}. Current challenge: ${selectedTopicDifficulty} in your 3-mile area.`;
+      ? `Route complete. Your answers and collections are saved to your QuestAR profile.`
+      : `Your answers and collections are saved as you play. Current challenge: ${selectedTopicDifficulty}.`;
   profileProgress.textContent = `${collectedCount}/${TOTAL_COLLECTIBLES}`;
   profileLevel.textContent = playerProfile.level;
   profileXp.textContent = `${playerProfile.xpIntoLevel}/${playerProfile.xpForNextLevel}`;
   profileStreak.textContent = `${playerProfile.streak}x`;
-  profileNearest.textContent = nearest
-    ? localDemoActive ? `${nearest.item.title} · ready` : `${nearest.item.title} ${formatDistance(getCollectibleDistance(nearest))}`
-    : 'Cleared';
-  profileRank.textContent = playerLeaderboardEntry ? `#${playerLeaderboardEntry.rank}` : '--';
-  profileDifficulty.textContent = selectedTopicDifficulty;
+  if (profileDifficulty) profileDifficulty.textContent = selectedTopicDifficulty;
   profileTimeTotal.textContent = formatUsageDuration(usageStats.totalSeconds);
   profileTimeToday.textContent = formatUsageDuration(usageStats.todaySeconds);
-  profileParentView.textContent = PAGES_DEMO_MODE ? 'This device' : 'Ready';
   renderLeaderboard(displayLeaderboard);
 }
 
 function renderLeaderboard(displayLeaderboard) {
   leaderboardList.replaceChildren();
+  leaderboardCard.classList.toggle('hidden', displayLeaderboard.length === 0);
 
   const visibleEntries = activeMode === 'you' ? displayLeaderboard : displayLeaderboard.slice(0, 6);
-  const playerEntry = displayLeaderboard.find((entry) => entry.id === playerProfile.id) || null;
-  const includesPlayer = visibleEntries.some((entry) => entry.id === playerProfile.id);
 
   visibleEntries.forEach((entry) => {
     const item = document.createElement('li');
     item.classList.toggle('is-you', entry.id === playerProfile.id);
-    item.classList.toggle('is-simulated', Boolean(entry.isSimulated));
 
     const identity = document.createElement('div');
     identity.className = 'leaderboard-list__identity';
@@ -2361,79 +2255,23 @@ function renderLeaderboard(displayLeaderboard) {
       identity.append(name, youTag);
     } else {
       identity.appendChild(name);
-      if (entry.isSimulated) {
-        const sampleTag = document.createElement('span');
-        sampleTag.className = 'leaderboard-list__tag leaderboard-list__tag--sample';
-        sampleTag.textContent = 'SAMPLE';
-        identity.appendChild(sampleTag);
-      }
     }
 
     const score = document.createElement('span');
-    score.textContent = entry.id === playerProfile.id
-      ? `Lv ${entry.level} - ${entry.xp} XP - ${entry.bestStreak}x best`
-      : `Lv ${entry.level} - ${entry.xp} XP - ${entry.distanceMiles.toFixed(1)} mi away`;
+    score.textContent = `Level ${entry.level} · ${entry.xp} XP · ${entry.bestStreak} best streak`;
 
     item.append(identity, score);
     leaderboardList.appendChild(item);
   });
-
-  if (!includesPlayer && playerEntry) {
-    const gap = document.createElement('li');
-    gap.className = 'leaderboard-list__gap';
-    gap.textContent = '...';
-    leaderboardList.appendChild(gap);
-
-    const item = document.createElement('li');
-    item.className = 'is-you';
-
-    const identity = document.createElement('div');
-    identity.className = 'leaderboard-list__identity';
-
-    const name = document.createElement('strong');
-    name.textContent = `${playerEntry.rank}. ${playerEntry.name}`;
-
-    const youTag = document.createElement('span');
-    youTag.className = 'leaderboard-list__tag';
-    youTag.textContent = 'YOU';
-    identity.append(name, youTag);
-
-    const score = document.createElement('span');
-    score.textContent = `Lv ${playerEntry.level} - ${playerEntry.xp} XP - ${playerEntry.bestStreak}x best`;
-
-    item.append(identity, score);
-    leaderboardList.appendChild(item);
-  }
 }
 
 function getDisplayLeaderboard() {
-  const merged = new Map();
-
-  SIMULATED_COMPETITORS.forEach((entry) => {
-    merged.set(entry.id, decorateClientProfile({
-      answersCorrect: 0,
-      answersTotal: 0,
-      animalCount: 0,
-      difficulty: null,
-      ...entry,
-      distanceMiles: getLocalAreaDistanceMiles(entry.id),
-      isSimulated: true,
-    }));
-  });
-
-  merged.set(playerProfile.id, decorateClientProfile({
-    ...playerProfile,
-    distanceMiles: 0,
-    name: playerName,
-    isSimulated: false,
-  }));
-
-  return Array.from(merged.values())
-    .sort((a, b) => b.xp - a.xp || b.bestStreak - a.bestStreak || a.name.localeCompare(b.name))
-    .map((entry, index) => ({
-      ...entry,
-      rank: index + 1,
-    }));
+  return Array.isArray(leaderboard)
+    ? leaderboard.map((entry, index) => ({
+        ...decorateClientProfile(entry),
+        rank: Number(entry.rank) || index + 1,
+      }))
+    : [];
 }
 
 function getCollectedCount() {
@@ -2525,48 +2363,6 @@ function formatCategoryLabel(category) {
     .join(' ');
 }
 
-function getLocalAreaDistanceMiles(seedKey) {
-  const seed = seedFromString(`leaderboard-${seedKey}`);
-  return 0.2 + (seed % 280) / 100;
-}
-
-function milesToMeters(miles) {
-  return miles * 1609.344;
-}
-
-function seedFromString(text) {
-  let seed = 0;
-
-  for (let index = 0; index < text.length; index += 1) {
-    seed = (seed * 31 + text.charCodeAt(index)) >>> 0;
-  }
-
-  return seed;
-}
-
-function offsetCoordinates(latitude, longitude, distanceMiles, bearingDegrees) {
-  const earthRadiusMiles = 3958.8;
-  const distanceRadians = distanceMiles / earthRadiusMiles;
-  const bearingRadians = THREE.MathUtils.degToRad(bearingDegrees);
-  const latitudeRadians = THREE.MathUtils.degToRad(latitude);
-  const longitudeRadians = THREE.MathUtils.degToRad(longitude);
-
-  const nextLatitude = Math.asin(
-    Math.sin(latitudeRadians) * Math.cos(distanceRadians)
-      + Math.cos(latitudeRadians) * Math.sin(distanceRadians) * Math.cos(bearingRadians),
-  );
-
-  const nextLongitude = longitudeRadians + Math.atan2(
-    Math.sin(bearingRadians) * Math.sin(distanceRadians) * Math.cos(latitudeRadians),
-    Math.cos(distanceRadians) - Math.sin(latitudeRadians) * Math.sin(nextLatitude),
-  );
-
-  return {
-    latitude: THREE.MathUtils.radToDeg(nextLatitude),
-    longitude: THREE.MathUtils.radToDeg(nextLongitude),
-  };
-}
-
 function getCollectibleScreenAngleDegrees(collectible) {
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   forward.y = 0;
@@ -2591,7 +2387,17 @@ function getCollectibleScreenAngleDegrees(collectible) {
 }
 
 function resetCollectibles() {
-  collectibles.forEach((collectible) => scene?.remove(collectible.group));
+  collectibles.forEach((collectible) => {
+    if (collectible.group?.isObject3D) {
+      scene?.remove(collectible.group);
+      collectible.group.traverse((object) => {
+        if (!object.material) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      });
+    }
+    collectible.ownedTextures?.forEach((texture) => texture.dispose());
+  });
   collectibles = [];
   collectiblesSpawned = false;
   highlightedCollectible = null;
@@ -2672,7 +2478,7 @@ function getNearestCollectible() {
 
 function getCollectibleDistance(collectible) {
   camera.getWorldPosition(cameraWorldPosition);
-  return collectible.group.position.distanceTo(cameraWorldPosition);
+  return horizontalDistance(cameraWorldPosition, collectible.group.position);
 }
 
 function getCollectibleDirection(collectible) {
@@ -2726,8 +2532,11 @@ function createReticle() {
 }
 
 function createCollectibleShadow() {
-  const geometry = new THREE.CircleGeometry(0.28, 36);
-  geometry.rotateX(-Math.PI / 2);
+  const geometry = getSharedOrbGeometry('ground-shadow', () => {
+    const circle = new THREE.CircleGeometry(0.28, 20);
+    circle.rotateX(-Math.PI / 2);
+    return circle;
+  });
 
   const material = new THREE.MeshBasicMaterial({
     color: 0x000000,
@@ -2746,17 +2555,6 @@ function showUnsupported(message) {
   startButton.textContent = 'AR not supported';
   statusText.textContent = message;
   unsupportedPanel.classList.remove('hidden');
-}
-
-function shuffleArray(items) {
-  const clone = [...items];
-
-  for (let index = clone.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [clone[index], clone[swapIndex]] = [clone[swapIndex], clone[index]];
-  }
-
-  return clone;
 }
 
 function handleResize() {

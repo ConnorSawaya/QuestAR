@@ -70,7 +70,10 @@ const CATEGORY_STYLE = {
 const GENERIC_QUESTIONS = [
   ['What is a useful first step when learning about {topic}?', ['Identify the key ideas', 'Ignore the evidence', 'Choose a random answer'], 0],
   ['How can you check a claim about {topic}?', ['Compare it with reliable evidence', 'Repeat it without checking', 'Avoid asking questions'], 0],
-  ['What helps build understanding of {topic}?', ['Practice and feedback', 'Skipping every example', 'Memorizing unrelated words'], 0],
+  ['What helps build understanding of {topic}?', ['Practice and feedback', 'Skip every example', 'Memorize unrelated words'], 0],
+  ['A source about {topic} makes a surprising claim. What should you do?', ['Check it against reliable sources', 'Assume it is true', 'Share it before reading'], 0],
+  ['When two explanations of {topic} disagree, what is a good next step?', ['Look for evidence that can distinguish them', 'Pick the longer explanation', 'Stop asking questions'], 0],
+  ['Which note is most useful while studying {topic}?', ['A short summary in your own words', 'A copied page you do not understand', 'A list with no labels'], 0],
 ];
 
 /** GitHub Pages can opt in with `--mode pages`; the host check also covers normal Pages builds. */
@@ -79,7 +82,7 @@ export function isPagesDemoMode(mode, hostname = '') {
   return mode === 'pages' || host === 'github.io' || host.endsWith('.github.io');
 }
 
-/** Generate a predictable, API-free set of six playable orbs for the static demo. */
+/** Generate a predictable, API-free set of playable orbs for local practice. */
 export function generateLocalTopic({ topic, difficulty = 'Easy', count = 6, wave = 0 } = {}) {
   const cleanTopic = String(topic || '').trim().slice(0, 80);
   if (!cleanTopic) throw new Error('Enter a topic to generate a local quest.');
@@ -93,8 +96,14 @@ export function generateLocalTopic({ topic, difficulty = 'Easy', count = 6, wave
   const orbCount = Math.max(1, Math.min(Number.isInteger(count) ? count : 6, 6));
   const questions = Array.from({ length: orbCount * 3 }, (_, index) => {
     const [prompt, options, answer] = templates[index % templates.length];
-    const qualifier = level === 'Expert' ? ' Choose the most precise answer.' : level === 'Hard' ? ' Think carefully.' : '';
-    return { prompt: `${prompt}${qualifier}`, options: [...options], answer };
+    const answerPosition = (index * 2 + 1) % options.length;
+    const rotatedOptions = [...options.slice(answerPosition), ...options.slice(0, answerPosition)];
+    const rotatedAnswer = (answer - answerPosition + options.length) % options.length;
+    return {
+      prompt: prompt.replaceAll('{topic}', cleanTopic),
+      options: rotatedOptions,
+      answer: rotatedAnswer,
+    };
   });
   const slug = cleanTopic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'topic';
   const orbs = Array.from({ length: orbCount }, (_, index) => ({
@@ -112,7 +121,7 @@ export function generateLocalTopic({ topic, difficulty = 'Easy', count = 6, wave
     topic: cleanTopic,
     difficulty: level,
     summary: category === 'general'
-      ? `Local practice quest for ${cleanTopic}. Custom topics use general study questions in this offline demo.`
+      ? `Local practice quest for ${cleanTopic}. Custom topics use general study strategies; connect the question service for topic-specific trivia.`
       : `Built-in ${category} question pack for ${cleanTopic}; no AI or server is required.`,
     orbs,
   };

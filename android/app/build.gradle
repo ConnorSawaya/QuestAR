@@ -1,0 +1,73 @@
+import java.util.Properties
+
+plugins {
+    id 'com.android.application'
+}
+
+def signingProperties = new Properties()
+def signingPropertiesFile = rootProject.file('release-signing.properties')
+if (!signingPropertiesFile.exists()) {
+    signingPropertiesFile = new File(System.getProperty('user.home'), '.questar/release-signing.properties')
+}
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+def hasReleaseSigning = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+    .every { signingProperties.getProperty(it)?.trim() }
+def questarLaunchUrl = providers.gradleProperty('questarLaunchUrl')
+    .getOrElse('https://connors.dev/quest-ar/app/')
+
+android {
+    namespace 'dev.connors.questar'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'dev.connors.questar'
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+        manifestPlaceholders = [questarLaunchUrl: questarLaunchUrl]
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile rootProject.file(signingProperties.getProperty('storeFile'))
+                storePassword signingProperties.getProperty('storePassword')
+                keyAlias signingProperties.getProperty('keyAlias')
+                keyPassword signingProperties.getProperty('keyPassword')
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.configureEach {
+    if (name in ['assembleRelease', 'bundleRelease'] && !hasReleaseSigning) {
+        doFirst {
+            throw new GradleException('Release signing is not configured. Follow android/README.md and create android/release-signing.properties from the example.')
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.3'
+}

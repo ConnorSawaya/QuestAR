@@ -1,6 +1,6 @@
 # GitHub Pages static demo
 
-The `main` branch workflow builds this Vite app with the `/QuestAR/` base path, runs the Node test suite, and deploys `dist` to <https://connorsawaya.github.io/QuestAR/>. It runs on pushes to `main` and can also be started manually from the repository's Actions tab. In repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**.
+The `main` branch workflow builds this Vite app with the `/QuestAR/` base path, runs the Node test suite, and deploys `dist` to <https://connorsawaya.github.io/QuestAR/>. It also builds a second copy under `dist/quest-ar/app/` for the Android Trusted Web Activity at <https://connors.dev/quest-ar/app/>. It runs on pushes to `main` and can also be started manually from the repository's Actions tab. In repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**.
 
 For a local development demo, run:
 
@@ -9,16 +9,28 @@ npm ci
 npm run dev
 ```
 
-To build and preview the same subpath bundle as Pages:
+To preview the installable production app locally at the site root:
 
 ```bash
-GITHUB_PAGES=true npm run build -- --mode pages
+npm run build
 npm run preview -- --host 127.0.0.1
 ```
 
-Open <http://127.0.0.1:4173/QuestAR/>. The flag is only used by the build; development and the existing Node/Railway build keep the `/` base path.
+Open <http://127.0.0.1:4173/>. To check the GitHub Pages asset paths, build with `GITHUB_PAGES=true npm run build -- --mode pages`; the generated bundle expects the `/QuestAR/` path used by GitHub Pages. Development and the existing Node/Railway build keep the `/` base path.
 
 GitHub Pages serves static files only. It does not run `server.js`, PostgreSQL, or NVIDIA-backed topic generation. Use the existing Node deployment for those server features; Pages-specific client behavior should remain usable without those services.
+
+The Vercel project for `connors.dev` must be deployed with rewrites for `/quest-ar/app/` and its files to the nested GitHub Pages build. The domain root must serve `/.well-known/assetlinks.json` with the Android application id `dev.connors.questar` and the release certificate fingerprint. Without this domain association, Android Browser Helper safely opens the site in a Custom Tab with browser controls.
+
+To connect the TWA build to the live Node service, set the GitHub repository variable `QUESTAR_API_BASE_URL` to the service's HTTPS origin. Set `CORS_ALLOWED_ORIGINS=https://connors.dev` on that Node service. Never put the NVIDIA key in a Vite variable; only the server should have it. If `QUESTAR_API_BASE_URL` is unset, the app explicitly runs local-only: built-in packs work without a network request, custom topics use general study prompts, and progress stays on the phone. If a configured API is unavailable, generation falls back to a two-stop local practice route with six unique prompts.
+
+The app uses the hosted Node API for custom AI-generated questions when online. On-device Gemini Nano Prompt API is not available on the connected Pixel 7 according to [Google's supported-device list](https://developers.google.com/ml-kit/genai), which currently lists Pixel 9 and newer. A future downloadable model would need a native [LiteRT-LM Android integration](https://developers.google.com/edge/litert-lm/android) and a separate model download; treat it as an optional experiment because even the mobile Gemma models need substantial storage and memory ([model estimates](https://ai.google.dev/gemma/docs/core.md#litert-lm-memory)). Keep the curated local packs as the guaranteed offline experience.
+
+## Install on Android
+
+The Pages demo is an installable web app. On an Android phone, open <https://connorsawaya.github.io/QuestAR/> in Chrome, open the browser menu, and choose **Install app** or **Add to Home screen**. The QuestAR icon launches the demo in its own window. The built-in question packs and saved progress work without an account or API; the service worker caches the app shell and same-origin app assets after the first visit. API requests and third-party map tiles are not cached.
+
+WebXR still depends on Chrome, a secure HTTPS origin, and a supported ARCore device. The local quiz route works without camera or location access. The static GitHub Pages app is not the Android package; see [the Android project README](../android/README.md) for the Android Studio build and install steps.
 
 ## Add a local question pack
 

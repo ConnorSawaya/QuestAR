@@ -14,6 +14,7 @@ const MAX_API_BODY_BYTES = 16_384;
 const MAX_RATE_LIMIT_BUCKETS = 10_000;
 const MAX_COLLECTIONS_PER_PLAYER = 250;
 const rateLimitBuckets = new Map();
+const corsAllowedOrigins = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
 
 const apiRateLimits = {
   'GET /api/profile': { limit: 60, windowMs: 60_000 },
@@ -49,6 +50,7 @@ const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
     if (url.pathname.startsWith('/api/')) {
+      if (!applyApiCors(request, response)) return;
       await handleApiRequest(request, response, url);
       return;
     }
@@ -60,6 +62,40 @@ const server = createServer(async (request, response) => {
     sendJson(response, statusCode, { error: statusCode >= 500 ? 'Server error' : error.message });
   }
 });
+
+function parseAllowedOrigins(value = '') {
+  return new Set(String(value).split(',').map((origin) => origin.trim()).filter((origin) => {
+    if (!origin) return false;
+    try {
+      const parsed = new URL(origin);
+      return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.origin === origin;
+    } catch {
+      return false;
+    }
+  }));
+}
+
+function applyApiCors(request, response) {
+  const origin = request.headers.origin;
+  const isAllowed = typeof origin === 'string' && corsAllowedOrigins.has(origin);
+  if (isAllowed) {
+    response.setHeader('Access-Control-Allow-Origin', origin);
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    response.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type');
+    response.setHeader('Access-Control-Max-Age', '600');
+    response.setHeader('Vary', 'Origin');
+  }
+
+  if (request.method !== 'OPTIONS') return true;
+  if (!isAllowed) {
+    sendJson(response, 403, { error: 'origin is not allowed for this API' });
+    return false;
+  }
+
+  response.writeHead(204);
+  response.end();
+  return false;
+}
 
 server.headersTimeout = 10_000;
 server.requestTimeout = 30_000;

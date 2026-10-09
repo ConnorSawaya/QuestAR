@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="QuestARTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">@color/questar_leaf</item>
+        <item name="android:statusBarColor">@color/questar_green</item>
+        <item name="android:navigationBarColor">@color/questar_paper</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/questar_paper</item>
+    </style>
+
+    <style name="QuestARLaunchTheme" parent="QuestARTheme">
+        <item name="android:windowBackground">@color/questar_green</item>
+    </style>
+
+    <style name="QuestARTransparentTheme" parent="android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>

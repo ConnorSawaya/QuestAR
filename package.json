@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
+    "build:android:web": "vite build --mode android --base /quest-ar/app/ --outDir dist/quest-ar/app",
     "preview": "vite preview --host 0.0.0.0",
     "start": "node server.js",
     "test": "node --test"

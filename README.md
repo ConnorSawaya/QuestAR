@@ -44,6 +44,10 @@ npm start
 
 The `main` branch deploys a static build to <https://connorsawaya.github.io/QuestAR/>. See [the Pages setup and local demo notes](docs/github-pages.md). GitHub Pages does not run the Node API or its database-backed features.
 
+### Install on Android
+
+The Pages demo can be installed from Android Chrome with **Install app** or **Add to Home screen**. The Android Studio project also builds signed APK and AAB artifacts using a Trusted Web Activity, which keeps QuestAR in Chrome's WebXR/ARCore runtime. See [the Android project and signing guide](android/README.md) and [the hosting and device notes](docs/github-pages.md). TWA verification needs the deployed `/quest-ar/app/` host and the root Asset Links file.
+
 The local server also exposes:
 
 ```text

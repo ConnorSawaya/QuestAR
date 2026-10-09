@@ -33,7 +33,14 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${port}`;
   serverProcess = spawn(process.execPath, [join(projectDir, 'server.js')], {
     cwd: workingDir,
-    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), TRUST_PROXY_HEADERS: 'true', NVIDIA_API_KEY: '' },
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      PORT: String(port),
+      TRUST_PROXY_HEADERS: 'true',
+      NVIDIA_API_KEY: '',
+      CORS_ALLOWED_ORIGINS: 'https://questar.example',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -70,6 +77,34 @@ test('profiles accept browser UUIDs and reject malformed identifiers', async () 
 
   const invalid = await fetch(`${baseUrl}/api/profile?playerId=../../etc/passwd`);
   assert.equal(invalid.status, 400);
+});
+
+test('API CORS allows only configured web origins and answers preflight requests', async () => {
+  const allowed = await fetch(`${baseUrl}/api/profile?playerId=questar-browser-1`, {
+    headers: { Origin: 'https://questar.example' },
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://questar.example');
+  assert.equal(allowed.headers.get('vary'), 'Origin');
+
+  const preflight = await fetch(`${baseUrl}/api/answer`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://questar.example',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type',
+    },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-methods'), 'GET, POST, OPTIONS');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Accept, Content-Type');
+
+  const denied = await fetch(`${baseUrl}/api/answer`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://unlisted.example', 'Access-Control-Request-Method': 'POST' },
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.headers.get('access-control-allow-origin'), null);
 });
 
 test('answer and collection payloads are constrained to supported gameplay values', async () => {

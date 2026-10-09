@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="QuestARLaunchTheme" parent="QuestARTheme">
+        <item name="android:windowSplashScreenBackground">@color/questar_green</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/questar_splash</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/questar_green</item>
+    </style>
+</resources>

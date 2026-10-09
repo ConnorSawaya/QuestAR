@@ -1,0 +1,5 @@
+# Copy this file to release-signing.properties; never commit that copy.
+storeFile=C:/path/to/questar-upload.jks
+storePassword=REPLACE_WITH_YOUR_STORE_PASSWORD
+keyAlias=questar-upload
+keyPassword=REPLACE_WITH_YOUR_KEY_PASSWORD

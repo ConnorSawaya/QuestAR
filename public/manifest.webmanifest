@@ -1,0 +1,31 @@
+{
+  "id": "./",
+  "name": "QuestAR · Field Notes",
+  "short_name": "QuestAR",
+  "description": "Choose a study topic, collect question orbs, and keep your field notes.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#244b3e",
+  "background_color": "#f0efe4",
+  "icons": [
+    {
+      "src": "./icons/questar-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/questar-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/questar-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
