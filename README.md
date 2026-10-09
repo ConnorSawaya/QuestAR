@@ -58,7 +58,7 @@ GET  /api/leaderboard
 POST /api/generate-topic
 ```
 
-Topic generation uses NVIDIA NIM when `NVIDIA_API_KEY` is set. The model defaults to `google/gemma-2-27b-it`; set `NIM_MODEL` to override it. If NIM is unavailable, the server falls back to built-in topic question banks.
+Topic generation uses NVIDIA NIM when `NVIDIA_API_KEY` is set. The model defaults to `nvidia/nemotron-3.5-lightning-30b-a3b`; set `NIM_MODEL` to override it. If NIM is unavailable, the server falls back to built-in topic question banks.
 
 For local secret setup, copy `.env.example` to `.env` and fill in your own values. `.env` is ignored by Git.
 
@@ -84,7 +84,7 @@ Optional Railway environment variables:
 
 ```text
 NVIDIA_API_KEY=your-nim-key
-NIM_MODEL=google/gemma-2-27b-it
+NIM_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
 DATABASE_SSL=true
 ```
 

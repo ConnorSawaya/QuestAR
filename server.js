@@ -551,15 +551,17 @@ async function generateTopicOrbs({ topic, difficulty, count, accuracy }) {
   try {
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(35_000),
       headers: {
         Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.NIM_MODEL || 'google/gemma-2-27b-it',
+        model: process.env.NIM_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b',
         temperature: 0.35,
-        max_tokens: 2200,
+        top_p: 0.95,
+        max_tokens: 2600,
+        chat_template_kwargs: { enable_thinking: false },
         messages: [
           {
             role: 'system',

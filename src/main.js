@@ -28,9 +28,13 @@ const LOCAL_PROGRESS_KEY = 'quest-ar-local-progress';
 const USAGE_STATS_KEY = 'quest-ar-usage-stats';
 const PAGES_DEMO_MODE = isPagesDemoMode(import.meta.env.MODE, window.location.hostname);
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const NIM_API_BASE_URL = String(import.meta.env.VITE_NIM_API_BASE_URL || '').replace(/\/+$/, '');
 const LOCAL_ONLY_MODE = PAGES_DEMO_MODE || !API_BASE_URL;
+const NIM_API_ENABLED = !PAGES_DEMO_MODE && Boolean(NIM_API_BASE_URL);
+const TOPIC_API_ENABLED = !PAGES_DEMO_MODE && (NIM_API_ENABLED || !LOCAL_ONLY_MODE);
 const LOCAL_ASSISTANT_NAME = PAGES_DEMO_MODE ? 'QuestAR sample' : 'QuestAR';
 const { get: apiFetch, post: postApi } = createApiClient({ baseUrl: API_BASE_URL, localOnly: LOCAL_ONLY_MODE });
+const { post: postNimApi } = createApiClient({ baseUrl: NIM_API_BASE_URL, localOnly: !NIM_API_ENABLED });
 
 let TRIVIA_COLLECTIBLES = [
   {
@@ -331,9 +335,15 @@ updateModePanels();
 
 if (LOCAL_ONLY_MODE) {
   localDemoButton.classList.remove('hidden');
-  topicStatus.textContent = 'Built-in question packs work offline and save progress on this device.';
+  topicStatus.textContent = NIM_API_ENABLED
+    ? 'Custom topics try online AI. Built-in packs and progress stay on this device.'
+    : 'Built-in question packs work offline and save progress on this device.';
   statusText.textContent = 'Choose a topic to prepare a route. Camera and location are used only when you choose those features.';
-  topicMessages.firstElementChild?.replaceChildren(document.createTextNode('Choose a built-in topic pack or try a custom topic. Without the question service, custom topics use general study practice.'));
+  topicMessages.firstElementChild?.replaceChildren(document.createTextNode(
+    NIM_API_ENABLED
+      ? 'Choose a built-in pack for offline play or ask QuestAR AI to make a custom study hunt when you are online. If AI is unavailable, QuestAR switches to local practice.'
+      : 'Choose a built-in topic pack or try a custom topic. Without the question service, custom topics use general study practice.',
+  ));
 } else {
   leaderboardTitle.textContent = 'Shared leaderboard';
   leaderboardNote.textContent = 'Scores are loaded from the QuestAR server.';
@@ -637,22 +647,23 @@ async function generateTopicQuest(topic, resetExisting) {
   questPreview.classList.add('hidden');
   updateStartButtonState();
   topicGenerate.disabled = true;
-  topicStatus.textContent = LOCAL_ONLY_MODE ? 'Preparing your study hunt...' : 'Building your study hunt...';
+  topicStatus.textContent = TOPIC_API_ENABLED ? 'Building your study hunt...' : 'Preparing your study hunt...';
   appendTopicMessage('You', topic);
   appendTopicMessage(LOCAL_ASSISTANT_NAME, 'Preparing your study hunt.');
 
   try {
     let payload;
-    if (LOCAL_ONLY_MODE) {
+    if (!TOPIC_API_ENABLED) {
       payload = generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty });
     } else {
       try {
-        payload = await postApi('/api/generate-topic', {
+        const generateTopic = NIM_API_ENABLED ? postNimApi : postApi;
+        payload = await generateTopic('/api/generate-topic', {
           topic,
           count: 6,
           difficulty: selectedTopicDifficulty,
           accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
-        });
+        }, { timeoutMs: 45_000 });
       } catch (error) {
         payload = generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty });
         payload.summary = `${payload.summary} The server could not be reached, so this route uses local practice questions.`;
@@ -1779,21 +1790,25 @@ async function startNextOrbWave() {
   orbWaveIndex += 1;
 
   try {
-    const payload = LOCAL_ONLY_MODE
+    const generateTopic = NIM_API_ENABLED ? postNimApi : postApi;
+    const payload = !TOPIC_API_ENABLED
       ? generateLocalTopic({ topic: currentTopicPrompt, count: 2, difficulty: selectedTopicDifficulty, wave: orbWaveIndex })
-      : await postApi('/api/generate-topic', {
+      : await generateTopic('/api/generate-topic', {
           topic: currentTopicPrompt,
           count: 6,
           difficulty: selectedTopicDifficulty,
           accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
-        });
+        }, { timeoutMs: 45_000 });
     applyGeneratedTopic(withWaveOrbIds(payload, orbWaveIndex), false);
   } catch (error) {
     console.warn('Could not generate next wave:', error.message);
-    TRIVIA_COLLECTIBLES = TRIVIA_COLLECTIBLES.map((item, index) => ({
-      ...item,
-      id: `${item.id}-wave-${orbWaveIndex}-${index}`,
-    }));
+    const fallback = generateLocalTopic({
+      topic: currentTopicPrompt,
+      count: 2,
+      difficulty: selectedTopicDifficulty,
+      wave: orbWaveIndex,
+    });
+    applyGeneratedTopic(withWaveOrbIds(fallback, orbWaveIndex), false);
   }
 
   resetCollectibles();

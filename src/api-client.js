@@ -2,7 +2,7 @@
 export function createApiClient({ baseUrl = '', localOnly = false, fetchImpl = globalThis.fetch } = {}) {
   const base = String(baseUrl).replace(/\/+$/, '');
 
-  async function request(path, { method = 'GET', body } = {}) {
+  async function request(path, { method = 'GET', body, timeoutMs = 12_000 } = {}) {
     if (localOnly) {
       throw new Error('This local demo uses on-device data and does not call the server API.');
     }
@@ -16,7 +16,7 @@ export function createApiClient({ baseUrl = '', localOnly = false, fetchImpl = g
         ? { Accept: 'application/json' }
         : { Accept: 'application/json', 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) {
@@ -28,6 +28,6 @@ export function createApiClient({ baseUrl = '', localOnly = false, fetchImpl = g
 
   return {
     get: (path) => request(path),
-    post: (path, body) => request(path, { method: 'POST', body }),
+    post: (path, body, options) => request(path, { ...options, method: 'POST', body }),
   };
 }

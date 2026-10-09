@@ -41,7 +41,9 @@ Outputs are `app/build/outputs/apk/release/app-release.apk` and `app/build/outpu
 
 The Pages workflow keeps publishing the regular `/QuestAR/` demo and also builds the production TWA variant into `dist/quest-ar/app/`. The portfolio's Vercel rewrite maps `/quest-ar/app/` and its assets to that second Pages path, and serves `/.well-known/assetlinks.json` with the upload certificate used for the local release artifacts. Deploy both repositories for the TWA URL to resolve. When Play App Signing is configured, add the Play app-signing certificate fingerprint to Asset Links as well; Play-installed APKs use that certificate instead of the upload key.
 
-For server features, set `VITE_API_BASE_URL` at web build time to the HTTPS origin of the deployed QuestAR Node service. On the API service, set `CORS_ALLOWED_ORIGINS=https://connors.dev` (plus any additional exact origins you intend to allow). The static Pages demo does not contain server-backed topic generation or shared accounts; if the API is unreachable, it offers a clearly labeled, shorter local practice route.
+The Android web build sends custom-topic generation to `https://connors.dev/api/generate-topic` through `VITE_NIM_API_BASE_URL`. Configure `NVIDIA_API_KEY` as a server-side Vercel environment variable; never add it to the Android build or a `VITE_` variable. The API only generates topics. Progress, profile, and built-in question packs stay on the phone. If the AI endpoint is unavailable, the app falls back to a shorter local practice route. The static Pages demo remains fully local-only.
+
+Shared profile and leaderboard features still use the optional QuestAR Node service. Set `VITE_API_BASE_URL` to that service's HTTPS origin and configure its `CORS_ALLOWED_ORIGINS` separately when you deploy it.
 
 ## Verification limits
 
