@@ -30,3 +30,19 @@ test('API client reports HTTP and local-only errors for the caller to handle', a
   await assert.rejects(failed.get('/api/profile'), /API 503/);
   await assert.rejects(local.post('/api/answer', {}), /local demo/);
 });
+
+test('API client preserves safe server error codes so the UI can explain AI fallbacks', async () => {
+  const client = createApiClient({
+    fetchImpl: async () => ({
+      ok: false,
+      status: 502,
+      json: async () => ({ error: 'Generation failed.', code: 'upstream_timeout' }),
+    }),
+  });
+
+  await assert.rejects(client.post('/api/generate-topic', { topic: 'biology' }), (error) => {
+    assert.equal(error.status, 502);
+    assert.equal(error.code, 'upstream_timeout');
+    return true;
+  });
+});

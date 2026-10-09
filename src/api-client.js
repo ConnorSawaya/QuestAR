@@ -20,7 +20,15 @@ export function createApiClient({ baseUrl = '', localOnly = false, fetchImpl = g
     });
 
     if (!response.ok) {
-      throw new Error(`API ${response.status}`);
+      const error = new Error(`API ${response.status}`);
+      error.status = response.status;
+      try {
+        const payload = await response.json();
+        if (typeof payload?.code === 'string') error.code = payload.code;
+      } catch {
+        // Keep the HTTP status when a server returns a non-JSON error page.
+      }
+      throw error;
     }
 
     return response.json();

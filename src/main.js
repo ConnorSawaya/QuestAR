@@ -15,6 +15,7 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 
 const RETICLE_RADIUS = 0.16;
 const COLLECTIBLE_HEIGHT = 0.56;
+const RADAR_REFRESH_INTERVAL_MS = 500;
 let TOTAL_COLLECTIBLES = 6;
 const REVEAL_DISTANCE_METERS = 1.8;
 const INTERACTION_DISTANCE_METERS = 1.25;
@@ -29,6 +30,7 @@ const USAGE_STATS_KEY = 'quest-ar-usage-stats';
 const PAGES_DEMO_MODE = isPagesDemoMode(import.meta.env.MODE, window.location.hostname);
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const NIM_API_BASE_URL = String(import.meta.env.VITE_NIM_API_BASE_URL || '').replace(/\/+$/, '');
+const EXPECTED_NIM_MODEL = 'z-ai/glm-5.3-flash';
 const LOCAL_ONLY_MODE = PAGES_DEMO_MODE || !API_BASE_URL;
 const NIM_API_ENABLED = !PAGES_DEMO_MODE && Boolean(NIM_API_BASE_URL);
 const TOPIC_API_ENABLED = !PAGES_DEMO_MODE && (NIM_API_ENABLED || !LOCAL_ONLY_MODE);
@@ -210,6 +212,7 @@ const leaderboardCard = document.querySelector('#leaderboard-card');
 const questPreview = document.querySelector('#quest-preview');
 const previewTitle = document.querySelector('#preview-title');
 const previewSummary = document.querySelector('#preview-summary');
+const generationSource = document.querySelector('#generation-source');
 const previewStops = document.querySelector('#preview-stops');
 const previewQuestions = document.querySelector('#preview-questions');
 const previewDifficulty = document.querySelector('#preview-difficulty');
@@ -256,6 +259,9 @@ let stableFloorFrames = 0;
 let gamePanelTouchStartY = null;
 let activeMode = 'hunt';
 let lastHudRefreshMs = 0;
+let lastRadarRefreshMs = 0;
+let directionArrowFailureLogged = false;
+let radarFailureLogged = false;
 let startInteractionInFlight = false;
 let lastFloorY = 0;
 let orbWaveIndex = 0;
@@ -336,7 +342,7 @@ updateModePanels();
 if (LOCAL_ONLY_MODE) {
   localDemoButton.classList.remove('hidden');
   topicStatus.textContent = NIM_API_ENABLED
-    ? 'Custom topics try online AI. Built-in packs and progress stay on this device.'
+    ? 'Custom topics try GLM 5.3 Flash online. QuestAR labels local practice if AI is unavailable.'
     : 'Built-in question packs work offline and save progress on this device.';
   statusText.textContent = 'Choose a topic to prepare a route. Camera and location are used only when you choose those features.';
   topicMessages.firstElementChild?.replaceChildren(document.createTextNode(
@@ -653,8 +659,9 @@ async function generateTopicQuest(topic, resetExisting) {
 
   try {
     let payload;
+    let fallbackError = null;
     if (!TOPIC_API_ENABLED) {
-      payload = generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty });
+      payload = { ...generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty }), source: 'local' };
     } else {
       try {
         const generateTopic = NIM_API_ENABLED ? postNimApi : postApi;
@@ -664,15 +671,20 @@ async function generateTopicQuest(topic, resetExisting) {
           difficulty: selectedTopicDifficulty,
           accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
         }, { timeoutMs: 45_000 });
+        if (NIM_API_ENABLED && !isExpectedNimPayload(payload)) {
+          throw Object.assign(new Error('The server did not confirm GLM 5.3 Flash.'), { code: 'model_unconfirmed' });
+        }
       } catch (error) {
-        payload = generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty });
-        payload.summary = `${payload.summary} The server could not be reached, so this route uses local practice questions.`;
+        fallbackError = error;
+        payload = { ...generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty }), source: 'local-fallback' };
+        payload.summary = `${payload.summary} This route uses on-device practice questions.`;
         console.warn('QuestAR switched to local questions:', error.message);
       }
     }
     applyGeneratedTopic(payload, resetExisting);
-    topicStatus.textContent = `${payload.orbs.length} ${payload.topic} stops are ready. Review the route before starting.`;
-    appendTopicMessage(LOCAL_ASSISTANT_NAME, payload.summary || `Prepared ${payload.orbs.length} stops.`);
+    const sourceStatus = updateTopicSourceStatus(payload, fallbackError);
+    topicStatus.textContent = `${sourceStatus.announcement} ${payload.orbs.length} ${payload.topic} ${payload.orbs.length === 1 ? 'stop is' : 'stops are'} ready. Review the route before starting.`;
+    appendTopicMessage(LOCAL_ASSISTANT_NAME, `${payload.summary || `Prepared ${payload.orbs.length} stops.`} ${sourceStatus.shortLabel}`);
   } catch (error) {
     topicStatus.textContent = 'Could not generate topic right now. Try again.';
     appendTopicMessage(LOCAL_ASSISTANT_NAME, `Could not build the hunt: ${error.message}`);
@@ -681,6 +693,70 @@ async function generateTopicQuest(topic, resetExisting) {
     topicGenerate.disabled = false;
     updateStartButtonState();
   }
+}
+
+function isExpectedNimPayload(payload) {
+  return payload?.source === 'nim' && payload.model === EXPECTED_NIM_MODEL;
+}
+
+function getTopicFallbackReason(error) {
+  if (error?.code === 'model_unconfirmed') return 'the server did not confirm GLM 5.3 Flash';
+  if (error?.code === 'provider_not_configured') return 'the AI service is not configured';
+  if (error?.code === 'upstream_timeout' || error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'the AI request timed out';
+  if (error?.code === 'invalid_model_output') return 'the AI returned questions QuestAR could not use';
+  if (error?.code === 'rate_limited' || error?.status === 429) return 'the AI service is rate-limited';
+  if (error?.code === 'upstream_http_429') return 'the AI service is rate-limited';
+  if (error?.code === 'upstream_http_401' || error?.code === 'upstream_http_403') return 'NVIDIA rejected the server key';
+  if (error?.code?.startsWith('upstream_http_')) return 'NVIDIA returned an error';
+  if (error?.status === 502) return 'the AI service returned an error';
+  if (error?.code === 'upstream_request_failed') return 'QuestAR could not reach NVIDIA';
+  return 'the AI service could not be reached';
+}
+
+function updateTopicSourceStatus(payload, fallbackError = null) {
+  let sourceStatus;
+  if (isExpectedNimPayload(payload)) {
+    sourceStatus = {
+      kind: 'ai',
+      label: 'AI-generated · GLM 5.3 Flash',
+      announcement: 'Generated by GLM 5.3 Flash.',
+      shortLabel: 'Generated by GLM 5.3 Flash.',
+    };
+  } else if (payload?.source === 'local-fallback') {
+    const reason = getTopicFallbackReason(fallbackError);
+    sourceStatus = {
+      kind: 'fallback',
+      label: 'Local fallback · not AI-generated',
+      announcement: `AI unavailable because ${reason}. These are on-device practice questions, not AI-generated.`,
+      shortLabel: `Local fallback: AI unavailable because ${reason}.`,
+    };
+  } else if (payload?.source === 'nim') {
+    sourceStatus = {
+      kind: 'unconfirmed',
+      label: 'AI model not confirmed',
+      announcement: 'The server did not confirm which AI model created these questions.',
+      shortLabel: 'AI model not confirmed.',
+    };
+  } else if (payload?.source === 'server') {
+    sourceStatus = {
+      kind: 'unconfirmed',
+      label: 'Server-generated · model unconfirmed',
+      announcement: 'These questions came from a server, but the AI model was not confirmed.',
+      shortLabel: 'Server response; AI model not confirmed.',
+    };
+  } else {
+    sourceStatus = {
+      kind: 'local',
+      label: 'On-device practice · no AI request',
+      announcement: 'No AI request was made. These are on-device practice questions.',
+      shortLabel: 'On-device practice; no AI request was made.',
+    };
+  }
+
+  generationSource.textContent = sourceStatus.label;
+  generationSource.dataset.source = sourceStatus.kind;
+  generationSource.classList.remove('hidden');
+  return sourceStatus;
 }
 
 function appendTopicMessage(sender, message) {
@@ -912,7 +988,9 @@ async function startLocalDemo() {
 
   if (!topicReady) {
     const topic = topicInput.value.trim() || currentTopicPrompt;
-    applyGeneratedTopic(generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty }), true);
+    const payload = { ...generateLocalTopic({ topic, count: 2, difficulty: selectedTopicDifficulty }), source: 'local' };
+    applyGeneratedTopic(payload, true);
+    updateTopicSourceStatus(payload);
   }
 
   localDemoActive = true;
@@ -1343,9 +1421,21 @@ function render(timestamp, frame) {
   updateCollectibles(performance.now() * 0.001);
 
   if (timestamp - lastHudRefreshMs > 220) {
-    updateClosestArrow();
-    if (activeMode === 'radar') updateRadarPanel();
+    try {
+      updateClosestArrow();
+      directionArrowFailureLogged = false;
+    } catch (error) {
+      closestArrow.classList.add('hidden');
+      if (!directionArrowFailureLogged) {
+        console.warn('QuestAR direction indicator paused safely:', error.message);
+        directionArrowFailureLogged = true;
+      }
+    }
     lastHudRefreshMs = timestamp;
+  }
+
+  if (activeMode === 'radar' && timestamp - lastRadarRefreshMs >= RADAR_REFRESH_INTERVAL_MS) {
+    updateRadarPanel();
   }
 
   renderer.render(scene, camera);
@@ -1788,27 +1878,47 @@ function collectCollectible(collectible) {
 
 async function startNextOrbWave() {
   orbWaveIndex += 1;
+  let fallbackError = null;
+  let payload;
 
   try {
-    const generateTopic = NIM_API_ENABLED ? postNimApi : postApi;
-    const payload = !TOPIC_API_ENABLED
-      ? generateLocalTopic({ topic: currentTopicPrompt, count: 2, difficulty: selectedTopicDifficulty, wave: orbWaveIndex })
-      : await generateTopic('/api/generate-topic', {
-          topic: currentTopicPrompt,
-          count: 6,
-          difficulty: selectedTopicDifficulty,
-          accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
-        }, { timeoutMs: 45_000 });
-    applyGeneratedTopic(withWaveOrbIds(payload, orbWaveIndex), false);
+    if (!TOPIC_API_ENABLED) {
+      payload = {
+        ...generateLocalTopic({ topic: currentTopicPrompt, count: 2, difficulty: selectedTopicDifficulty, wave: orbWaveIndex }),
+        source: 'local',
+      };
+    } else {
+      const generateTopic = NIM_API_ENABLED ? postNimApi : postApi;
+      payload = await generateTopic('/api/generate-topic', {
+        topic: currentTopicPrompt,
+        count: 6,
+        difficulty: selectedTopicDifficulty,
+        accuracy: playerProfile.answersTotal ? playerProfile.answersCorrect / playerProfile.answersTotal : 0.7,
+      }, { timeoutMs: 45_000 });
+      if (NIM_API_ENABLED && !isExpectedNimPayload(payload)) {
+        throw Object.assign(new Error('The server did not confirm GLM 5.3 Flash.'), { code: 'model_unconfirmed' });
+      }
+    }
   } catch (error) {
+    fallbackError = error;
     console.warn('Could not generate next wave:', error.message);
-    const fallback = generateLocalTopic({
-      topic: currentTopicPrompt,
-      count: 2,
-      difficulty: selectedTopicDifficulty,
-      wave: orbWaveIndex,
-    });
-    applyGeneratedTopic(withWaveOrbIds(fallback, orbWaveIndex), false);
+    payload = {
+      ...generateLocalTopic({
+        topic: currentTopicPrompt,
+        count: 2,
+        difficulty: selectedTopicDifficulty,
+        wave: orbWaveIndex,
+      }),
+      source: 'local-fallback',
+    };
+    payload.summary = `${payload.summary} This wave uses on-device practice questions.`;
+  }
+
+  const wavePayload = withWaveOrbIds(payload, orbWaveIndex);
+  applyGeneratedTopic(wavePayload, false);
+  const sourceStatus = updateTopicSourceStatus(wavePayload, fallbackError);
+  if (sourceStatus.kind === 'fallback') {
+    gameHint.textContent = 'AI could not generate this wave, so it uses on-device practice questions.';
   }
 
   resetCollectibles();
@@ -1821,6 +1931,11 @@ async function startNextOrbWave() {
   } else {
     spawnCollectiblesNearPlayer(lastFloorY);
   }
+  gameHint.textContent = sourceStatus.kind === 'ai'
+    ? 'New wave generated by GLM 5.3 Flash.'
+    : sourceStatus.kind === 'fallback'
+      ? 'AI could not generate this wave, so it uses on-device practice questions.'
+      : 'New on-device practice wave ready.';
 }
 
 function withWaveOrbIds(payload, waveIndex) {
@@ -1933,11 +2048,11 @@ function setActiveMode(mode) {
   if (mode === 'map') {
     updateAreaMap();
   }
-  if (mode === 'radar') updateRadarPanel();
+  if (mode === 'radar') updateRadarPanel(true);
 }
 
 function updateModePanels() {
-  if (activeMode === 'radar') updateRadarPanel();
+  if (activeMode === 'radar') updateRadarPanel(true);
   updateJournalPanel();
   updateProfilePanel();
   if (!currentSession) updateClosestArrow();
@@ -1968,7 +2083,28 @@ function updateClosestArrow() {
   closestArrow.classList.remove('hidden');
 }
 
-function updateRadarPanel() {
+function updateRadarPanel(force = false) {
+  const now = performance.now();
+  if (!force && now - lastRadarRefreshMs < RADAR_REFRESH_INTERVAL_MS) return;
+  lastRadarRefreshMs = now;
+
+  try {
+    renderRadarPanel();
+    radarFailureLogged = false;
+  } catch (error) {
+    if (!radarFailureLogged) {
+      console.error('QuestAR radar update failed safely:', error);
+      radarFailureLogged = true;
+    }
+    radarSummary.textContent = 'Radar is temporarily unavailable. Your hunt is still running.';
+    radarList.replaceChildren();
+    const message = document.createElement('strong');
+    message.textContent = 'Direction tracking paused';
+    radarList.appendChild(message);
+  }
+}
+
+function renderRadarPanel() {
   if (localDemoActive) {
     const remaining = collectibles.filter((collectible) => !collectible.collected).length;
     radarSummary.textContent = remaining
@@ -2379,6 +2515,10 @@ function formatCategoryLabel(category) {
 }
 
 function getCollectibleScreenAngleDegrees(collectible) {
+  if (!camera || !collectible?.group?.position) {
+    return 0;
+  }
+
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   forward.y = 0;
 
@@ -2476,7 +2616,16 @@ function renderCollectibleList() {
 }
 
 function getNearestCollectible() {
-  const activeCollectibles = collectibles.filter((collectible) => !collectible.collected);
+  if (!camera || !Array.isArray(collectibles)) return null;
+  const activeCollectibles = collectibles.filter((collectible) => (
+    collectible
+    && !collectible.collected
+    && collectible.item
+    && collectible.group?.position
+    && Number.isFinite(collectible.group.position.x)
+    && Number.isFinite(collectible.group.position.y)
+    && Number.isFinite(collectible.group.position.z)
+  ));
 
   if (!activeCollectibles.length) {
     return null;
@@ -2492,11 +2641,14 @@ function getNearestCollectible() {
 }
 
 function getCollectibleDistance(collectible) {
+  if (!camera || !collectible?.group?.position) return Number.POSITIVE_INFINITY;
   camera.getWorldPosition(cameraWorldPosition);
-  return horizontalDistance(cameraWorldPosition, collectible.group.position);
+  const distance = horizontalDistance(cameraWorldPosition, collectible.group.position);
+  return Number.isFinite(distance) ? distance : Number.POSITIVE_INFINITY;
 }
 
 function getCollectibleDirection(collectible) {
+  if (!camera || !collectible?.group?.position) return 'Ahead';
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   forward.y = 0;
 
